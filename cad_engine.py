@@ -18,12 +18,15 @@ from dxf_render import sub as _sub
 from dxf_render import unit as _unit
 
 
+# Monochrome, weight-differentiated linework (name -> lineweight in 1/100
+# mm): heavy walls, medium openings, thin dimensions - matching the
+# black-on-white shop-drawing references rather than colored CAD layers.
 LAYER_DEFS = {
-    "WALLS": 7,
-    "DOORS": 1,
-    "WINDOWS": 5,
-    "TEXT": 2,
-    "DIMS": 3,
+    "WALLS": 50,
+    "DOORS": 25,
+    "WINDOWS": 18,
+    "TEXT": 25,
+    "DIMS": 13,
 }
 
 
@@ -163,8 +166,9 @@ def build_doc(spec: dict):
     doc.units = ezdxf.units.MM
     msp = doc.modelspace()
 
-    for name, color in LAYER_DEFS.items():
-        doc.layers.add(name, color=color)
+    for name, lineweight in LAYER_DEFS.items():
+        layer = doc.layers.add(name, color=7)
+        layer.dxf.lineweight = lineweight
 
     walls = spec.get("walls", []) or []
     openings = spec.get("openings", []) or []

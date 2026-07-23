@@ -116,8 +116,34 @@ CONTAINER_SCHEMA = {
                     "properties": {
                         "width_mm": {"type": "number"},
                         "position_from_left_mm": {"type": "number"},
+                        "height_mm": {"type": "number"},
                     },
                     "required": ["width_mm", "position_from_left_mm"],
+                },
+                "windows": {
+                    "type": "array",
+                    "description": (
+                        "Windows in the back wall (the wall the kitchen run sits "
+                        "against), each drawn with a W:width*height callout."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "width_mm": {"type": "number"},
+                            "height_mm": {"type": "number"},
+                            "position_from_left_mm": {"type": "number"},
+                        },
+                        "required": ["width_mm", "height_mm", "position_from_left_mm"],
+                    },
+                },
+                "deck": {
+                    "type": "object",
+                    "description": (
+                        "Fold-out deck/terrace in front of the sliding-door wall, "
+                        "drawn in plan with projection lines and its own dimensions."
+                    ),
+                    "properties": {"depth_mm": {"type": "number"}},
+                    "required": ["depth_mm"],
                 },
             },
         },

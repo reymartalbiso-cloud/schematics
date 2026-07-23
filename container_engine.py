@@ -112,43 +112,54 @@ def _insulation_fill(msp, x0, y0, x1, y1, layer="INSULATION", step=180):
     msp.add_lwpolyline(pts, dxfattribs={"layer": layer})
 
 
-def _draw_container_walls(msp, ox, oy, length, width, thickness, door_gap=None):
-    """Double-line walls with an insulation zigzag fill between the outer and
-    inner face, matching standard architectural wall-cavity drafting rather
-    than a plain single-line rectangle. `door_gap`, if given, is an (x0, x1)
-    range on the bottom wall left open for a sliding-door track, drawn as a
-    double parallel-line break rather than a single line or closed box.
+def _draw_container_walls(msp, ox, oy, length, width, thickness, glass_front=False, back_gaps=None):
+    """Insulated double-line walls (zigzag cavity fill) on the left, right,
+    and back (top) sides, matching standard wall-cavity drafting. The front
+    (bottom) side is either a fourth insulated wall or - when `glass_front`
+    is set, as in the reference fold-open units - a thin glazing-frame wall
+    drawn separately by the caller. `back_gaps` is a list of (x0, x1) window
+    openings in the back wall: the cavity fill is interrupted across them so
+    the window symbol isn't buried under insulation texture.
 
     Returns the interior (room-side) rectangle bounds: (ix0, iy0, ix1, iy1).
     """
     ix0, iy0 = ox + thickness, oy + thickness
     ix1, iy1 = ox + length - thickness, oy + width - thickness
 
-    _rect_open_sides(msp, ox, oy, ox + length, oy + width, "OUTLINE", bottom_gap=door_gap)
-    _rect_open_sides(msp, ix0, iy0, ix1, iy1, "OUTLINE", bottom_gap=door_gap)
+    bottom_gap = (ox, ox + length) if glass_front else None
+    _rect_open_sides(msp, ox, oy, ox + length, oy + width, "OUTLINE", bottom_gap=bottom_gap)
+    _rect_open_sides(msp, ix0, iy0, ix1, iy1, "OUTLINE", bottom_gap=bottom_gap)
+    if glass_front:
+        # Close the exposed wall-cavity ends at the front corners.
+        msp.add_line((ox, oy), (ix0, oy), dxfattribs={"layer": "OUTLINE"})
+        msp.add_line((ix1, oy), (ox + length, oy), dxfattribs={"layer": "OUTLINE"})
 
-    # Left, right, and top wall cavities always run their full extent.
+    # Left and right wall cavities always run their full extent.
     _insulation_fill(msp, ox, oy, ix0, oy + width)
     _insulation_fill(msp, ix1, oy, ox + length, oy + width)
-    _insulation_fill(msp, ox, iy1, ox + length, oy + width)
 
-    if door_gap is None:
+    # Back (top) wall cavity, interrupted at window openings.
+    cursor = ox
+    for gap_x0, gap_x1 in sorted(back_gaps or []):
+        if cursor < gap_x0:
+            _insulation_fill(msp, cursor, iy1, gap_x0, oy + width)
+        cursor = max(cursor, gap_x1)
+    if cursor < ox + length:
+        _insulation_fill(msp, cursor, iy1, ox + length, oy + width)
+
+    if not glass_front:
         _insulation_fill(msp, ox, oy, ox + length, iy0)
-    else:
-        gap_x0, gap_x1 = door_gap
-        if ox < gap_x0:
-            _insulation_fill(msp, ox, oy, gap_x0, iy0)
-        if gap_x1 < ox + length:
-            _insulation_fill(msp, gap_x1, oy, ox + length, iy0)
-
-        # Double parallel lines across the gap = sliding-door track, the
-        # standard convention for a sliding opening rather than a hinged door.
-        track_y1 = oy + thickness * 0.33
-        track_y2 = oy + thickness * 0.66
-        msp.add_line((gap_x0, track_y1), (gap_x1, track_y1), dxfattribs={"layer": "DOOR"})
-        msp.add_line((gap_x0, track_y2), (gap_x1, track_y2), dxfattribs={"layer": "DOOR"})
 
     return ix0, iy0, ix1, iy1
+
+
+def _front_frame_joints(frame_x0, frame_x1, door_x0, door_x1, post=100, gap=50):
+    """X positions of the glazing-frame joints across the front wall:
+    end post | side panel | gap | sliding door | gap | side panel | end post.
+    Matches the reference breakdown (e.g. 100/1654/50/2000/50/1654/100)."""
+    joints = [frame_x0, frame_x0 + post, door_x0 - gap, door_x0, door_x1, door_x1 + gap, frame_x1 - post, frame_x1]
+    # Collapse out-of-order joints (door hard against one end, tiny panels).
+    return sorted(set(x for x in joints if frame_x0 <= x <= frame_x1))
 
 
 def _mtext_simple(msp, text, x, y, height, layer):
@@ -161,9 +172,21 @@ def _mtext_simple(msp, text, x, y, height, layer):
     return mt
 
 
-def _title_below(msp, title, cx, y, layer="TEXT", height=120):
-    if title:
-        _mtext_simple(msp, title, cx, y, height, layer)
+def _title_below(msp, title, cx, y, layer="TEXT", height=130, scale="1:30"):
+    """Underlined view title with a scale suffix, matching the reference
+    convention ("Plan View  1:30" with the title underlined)."""
+    if not title:
+        return
+    _mtext_simple(msp, f"{title}  {scale}", cx, y, height, layer)
+    # Underline sized to the title text (~0.62 * char height per character
+    # is a serviceable width estimate for the condensed CAD face).
+    half_w = len(title) * height * 0.62 / 2.0
+    shift = len(scale) * height * 0.31  # keep the underline under the title only
+    msp.add_line(
+        (cx - half_w - shift, y - height * 0.85),
+        (cx + half_w - shift, y - height * 0.85),
+        dxfattribs={"layer": layer},
+    )
 
 
 def _dim_chain(msp, base_offset, points_y, xs, layer="DIMS"):
@@ -213,16 +236,18 @@ def _classify_fixture(label):
 
 
 def _draw_stove_symbol(msp, x0, y0, x1, y1, layer):
-    """2x2 grid of small circles representing burners, the standard plan
-    symbol for a stove/hob - not just a text label."""
+    """2x2 grid of double-ringed circles representing burners, matching the
+    reference drawings' hob symbol - not just a text label."""
     cx = (x0 + x1) / 2.0
     cy = (y0 + y1) / 2.0
-    span_x = (x1 - x0) * 0.3
-    span_y = (y1 - y0) * 0.3
-    radius = min(span_x, span_y) * 0.35
+    span_x = (x1 - x0) * 0.42
+    span_y = (y1 - y0) * 0.42
+    radius = min(span_x, span_y) * 0.42
     for dx in (-span_x / 2.0, span_x / 2.0):
         for dy in (-span_y / 2.0, span_y / 2.0):
-            msp.add_circle(center=(cx + dx, cy + dy), radius=radius, dxfattribs={"layer": layer})
+            center = (cx + dx, cy + dy)
+            msp.add_circle(center=center, radius=radius, dxfattribs={"layer": layer})
+            msp.add_circle(center=center, radius=radius * 0.55, dxfattribs={"layer": layer})
 
 
 def _rounded_rect(msp, x0, y0, x1, y1, radius, layer):
@@ -239,13 +264,15 @@ def _rounded_rect(msp, x0, y0, x1, y1, radius, layer):
     msp.add_arc(center=(x0 + r, y0 + r), radius=r, start_angle=180, end_angle=270, dxfattribs={"layer": layer})
 
 
-def _draw_sink_symbol(msp, x0, y0, x1, y1, layer, dim_layer):
-    """Two side-by-side rounded basins with a faucet tick and a local
-    dimension measuring the spacing across them - not just a text label."""
+def _draw_sink_symbol(msp, x0, y0, x1, y1, layer):
+    """Two side-by-side rounded basins with a faucet (circle + spout),
+    matching the reference drawings' double-sink symbol."""
     margin_x = (x1 - x0) * 0.12
-    margin_y = (y1 - y0) * 0.2
+    # Extra clearance at the top (wall side) keeps the basins out of the
+    # window width dimension drawn just under the back wall.
     inner_x0, inner_x1 = x0 + margin_x, x1 - margin_x
-    inner_y0, inner_y1 = y0 + margin_y, y1 - margin_y
+    inner_y0 = y0 + (y1 - y0) * 0.12
+    inner_y1 = y1 - (y1 - y0) * 0.34
     mid_x = (inner_x0 + inner_x1) / 2.0
     gap = (inner_x1 - inner_x0) * 0.08
     basin_w = (inner_x1 - inner_x0 - gap) / 2.0
@@ -256,33 +283,30 @@ def _draw_sink_symbol(msp, x0, y0, x1, y1, layer, dim_layer):
     _rounded_rect(msp, left_x0, inner_y0, left_x1, inner_y1, radius, layer)
     _rounded_rect(msp, right_x0, inner_y0, right_x1, inner_y1, radius, layer)
 
-    tick_y0 = inner_y1
-    tick_y1 = inner_y1 + (inner_y1 - inner_y0) * 0.25
-    msp.add_line((mid_x, tick_y0), (mid_x, tick_y1), dxfattribs={"layer": layer})
-
-    dim_offset = (inner_y1 - inner_y0) * 0.4
-    _dim(msp, (left_x0, tick_y1), (right_x1, tick_y1), dim_offset, dim_layer)
-
-
-def _draw_fridge_symbol(msp, x0, y0, x1, y1, depth, layer, dim_layer):
-    """Fridge footprint with a door-swing/handle indicator and a stacked
-    pair of local depth-detail dimensions - not just a text label."""
-    hinge_radius = min(x1 - x0, y1 - y0) * 0.5
-    msp.add_arc(
-        center=(x1, y0), radius=hinge_radius,
-        start_angle=90, end_angle=180,
+    # Faucet between the basins along the back edge: small body circle with
+    # a short spout line angled over one basin.
+    faucet_r = (inner_y1 - inner_y0) * 0.12
+    faucet_y = inner_y1 - faucet_r
+    msp.add_circle(center=(mid_x, faucet_y), radius=faucet_r, dxfattribs={"layer": layer})
+    msp.add_line(
+        (mid_x, faucet_y),
+        (mid_x - faucet_r * 2.2, faucet_y - faucet_r * 2.2),
         dxfattribs={"layer": layer},
     )
 
-    detail_x1 = x1 + 120
-    detail_x2 = x1 + 280
-    dim_a = max(5.0, round(depth * 0.5 / 5.0) * 5)
-    dim_b = max(5.0, round(depth * 0.79 / 5.0) * 5)
 
-    # direction here is ascending-y ((0,1)), whose perpendicular points in
-    # -x (see _dim_chain_vertical) - offset sign is x1 - detail_x, matching.
-    _dim(msp, (x1, y0), (x1, y0 + dim_a), x1 - detail_x1, dim_layer)
-    _dim(msp, (x1, y0), (x1, y0 + dim_b), x1 - detail_x2, dim_layer)
+def _draw_fridge_symbol(msp, x0, y0, x1, y1, layer, text_layer):
+    """Boxed fridge footprint labeled REF with a door line along the front
+    edge, matching the reference drawings."""
+    margin = min(x1 - x0, y1 - y0) * 0.08
+    bx0, by0, bx1, by1 = x0 + margin, y0 + margin, x1 - margin, y1 - margin
+    _rect(msp, bx0, by0, bx1, by1, layer)
+    # Door leaf line along the room-facing edge with a small handle tick.
+    msp.add_line((bx0, by0 + margin), (bx1, by0 + margin), dxfattribs={"layer": layer})
+    msp.add_line(
+        (bx1 - margin, by0 + margin), (bx1 - margin, by0), dxfattribs={"layer": layer}
+    )
+    _mtext_simple(msp, "REF", (bx0 + bx1) / 2.0, (by0 + by1) / 2.0, 110, text_layer)
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +314,11 @@ def _draw_fridge_symbol(msp, x0, y0, x1, y1, depth, layer, dim_layer):
 # ---------------------------------------------------------------------------
 
 def draw_plan_view(msp, spec, origin):
+    """Plan view following the reference shop-drawing layout: kitchen run
+    along the back (top) wall with symbol fixtures, W:/D: callouts, window
+    breaks in the back wall, a glazing-frame front wall with sliding door,
+    and the fold-out deck below with dashed projection lines and stacked
+    dimension rows."""
     ox, oy = origin
     container = spec.get("container", {})
     length = container.get("length_mm", 6058)
@@ -299,27 +328,54 @@ def draw_plan_view(msp, spec, origin):
     plan = spec.get("plan", {})
     kitchen_run = plan.get("kitchen_run")
     sliding_door = plan.get("sliding_door")
+    windows = plan.get("windows") or []
+    deck = plan.get("deck")
 
-    door_gap = None
+    door_x0 = door_x1 = None
     if sliding_door:
         door_width = sliding_door.get("width_mm", 0)
         pos_from_left = sliding_door.get("position_from_left_mm", 0)
-        door_gap = (ox + pos_from_left, ox + pos_from_left + door_width)
+        door_x0 = ox + pos_from_left
+        door_x1 = door_x0 + door_width
 
-    ix0, iy0, ix1, iy1 = _draw_container_walls(msp, ox, oy, length, width, thickness, door_gap)
+    back_gaps = []
+    for win in windows:
+        w_x0 = ox + win.get("position_from_left_mm", 0)
+        back_gaps.append((w_x0, w_x0 + win.get("width_mm", 0)))
 
-    bottom_dim_y = oy  # tracks how far dimension rows have stacked below the wall
+    ix0, iy0, ix1, iy1 = _draw_container_walls(
+        msp, ox, oy, length, width, thickness,
+        glass_front=bool(sliding_door), back_gaps=back_gaps,
+    )
 
+    # --- Back (top) wall windows: jambs, slider panes, dim, W: callout ---
+    for win, (w_x0, w_x1) in zip(windows, back_gaps):
+        msp.add_line((w_x0, iy1), (w_x0, oy + width), dxfattribs={"layer": "OUTLINE"})
+        msp.add_line((w_x1, iy1), (w_x1, oy + width), dxfattribs={"layer": "OUTLINE"})
+        # Sliding-window symbol: two overlapping panes offset within the
+        # cavity, with a meeting rail at the overlap.
+        mid_x = (w_x0 + w_x1) / 2.0
+        y_lo = iy1 + thickness * 0.3
+        y_hi = iy1 + thickness * 0.7
+        msp.add_line((w_x0, y_hi), (mid_x + (w_x1 - w_x0) * 0.05, y_hi), dxfattribs={"layer": "GLAZING"})
+        msp.add_line((mid_x - (w_x1 - w_x0) * 0.05, y_lo), (w_x1, y_lo), dxfattribs={"layer": "GLAZING"})
+        _dim(msp, (w_x0, iy1), (w_x1, iy1), -160, "DIMS")
+        callout = f"W:{round(win.get('width_mm', 0))}*{round(win.get('height_mm', 0))}mm"
+        _mtext_simple(msp, callout, (w_x0 + w_x1) / 2.0, oy + width + 170, 110, "TEXT")
+
+    # --- Kitchen run along the back (top) wall ---
     if kitchen_run:
         depth = kitchen_run.get("depth_mm", 700)
         segments = kitchen_run.get("segments", [])
         if segments:
-            band_y0 = iy0
-            band_y1 = band_y0 + depth
+            band_y1 = iy1
+            band_y0 = band_y1 - depth
+            mid_y = (band_y0 + band_y1) / 2.0
             cursor_x = ix0
             boundary_xs = [cursor_x]
+            centerline_end = None  # trims the dashed midline before a trailing fridge
 
-            for seg in segments:
+            for i, seg in enumerate(segments):
                 seg_width = seg.get("width_mm", 0)
                 seg_x0, seg_x1 = cursor_x, cursor_x + seg_width
 
@@ -329,47 +385,94 @@ def draw_plan_view(msp, spec, origin):
                 if kind == "stove":
                     _draw_stove_symbol(msp, seg_x0, band_y0, seg_x1, band_y1, "KITCHEN")
                 elif kind == "sink":
-                    _draw_sink_symbol(msp, seg_x0, band_y0, seg_x1, band_y1, "KITCHEN", "DIMS")
+                    _draw_sink_symbol(msp, seg_x0, band_y0, seg_x1, band_y1, "KITCHEN")
                 elif kind == "fridge":
-                    _draw_fridge_symbol(msp, seg_x0, band_y0, seg_x1, band_y1, depth, "KITCHEN", "DIMS")
-
-                label = seg.get("label", "")
-                if label:
-                    mid_x = (seg_x0 + seg_x1) / 2.0
-                    label_y = band_y0 + min(120.0, depth * 0.2)
-                    _mtext_simple(msp, label, mid_x, label_y, 90, "KITCHEN")
+                    _draw_fridge_symbol(msp, seg_x0, band_y0, seg_x1, band_y1, "KITCHEN", "TEXT")
+                    if i == len(segments) - 1:
+                        centerline_end = seg_x0
+                else:
+                    # Reference drawings label only the fridge (REF); plain
+                    # counter/cabinet segments carry no text. Label anything
+                    # that isn't a recognized symbol so no info is lost -
+                    # placed below the dashed midline, not through it.
+                    label = seg.get("label", "")
+                    if label:
+                        _mtext_simple(msp, label, (seg_x0 + seg_x1) / 2.0,
+                                      (band_y0 + mid_y) / 2.0, 90, "KITCHEN")
 
                 cursor_x = seg_x1
                 boundary_xs.append(cursor_x)
 
-            # Front edge of the counter, facing into the room - without this
-            # the counter reads as bare divider lines rather than a real run.
-            msp.add_line((ix0, band_y1), (cursor_x, band_y1), dxfattribs={"layer": "KITCHEN"})
+            # Counter front edge facing the room, plus the dashed midline the
+            # references use to mark the counter's centerline.
+            msp.add_line((ix0, band_y0), (cursor_x, band_y0), dxfattribs={"layer": "KITCHEN"})
+            msp.add_line((ix0, mid_y), (centerline_end or cursor_x, mid_y),
+                         dxfattribs={"layer": "KITCHEN", "linetype": "DASHED"})
 
-            row1_y = band_y1 + 250
-            _dim_chain(msp, row1_y, band_y1, boundary_xs, layer="DIMS")
+            # Segment chain just below the counter, inside the room.
+            _dim_chain(msp, band_y0 - 250, band_y0, boundary_xs, layer="DIMS")
 
+    # --- Front (bottom) glazing-frame wall with sliding door ---
     if sliding_door:
-        door_x0, door_x1 = door_gap
-        far_end_x = ox + length
-        boundary_xs = [ox, door_x0, door_x1, far_end_x]
-        row2_y = oy - 400
-        _dim_chain(msp, row2_y, oy, boundary_xs, layer="DIMS")
-        bottom_dim_y = row2_y
+        frame_y1 = oy
+        frame_y0 = oy - 60
+        joints = _front_frame_joints(ix0, ix1, door_x0, door_x1)
+        msp.add_line((ix0, frame_y1), (ix1, frame_y1), dxfattribs={"layer": "GLAZING"})
+        msp.add_line((ix0, frame_y0), (ix1, frame_y0), dxfattribs={"layer": "GLAZING"})
+        for x in joints:
+            msp.add_line((x, frame_y0), (x, frame_y1), dxfattribs={"layer": "GLAZING"})
+        # Sliding door: heavier double track lines across its opening.
+        msp.add_line((door_x0, frame_y0 + 15), (door_x1, frame_y0 + 15), dxfattribs={"layer": "DOOR"})
+        msp.add_line((door_x0, frame_y1 - 15), (door_x1, frame_y1 - 15), dxfattribs={"layer": "DOOR"})
 
-    # Outermost overall span for this wall (interior face to interior face),
-    # always shown regardless of kitchen/door fixtures.
-    row3_y = bottom_dim_y - 500
-    _dim_chain(msp, row3_y, oy, [ix0, ix1], layer="DIMS")
-    bottom_dim_y = row3_y
+    # --- Fold-out deck below the front wall ---
+    deck_bottom_y = oy
+    if deck and sliding_door:
+        deck_depth = deck.get("depth_mm", 2262)
+        deck_y1 = oy - 60
+        deck_y0 = deck_y1 - deck_depth
+        deck_bottom_y = deck_y0
+        rail = 60
 
-    # Outermost dimensions of the whole drawing: container overall length
-    # across the top, overall width down the side.
-    _dim_chain(msp, oy + width + 400, oy + width, [ox, ox + length], layer="DIMS")
-    _dim_chain_vertical(msp, ox - 400, ox, [oy, oy + width], layer="DIMS")
+        _rect(msp, ix0, deck_y0, ix1, deck_y1, "DECK")
+        # Side + bottom rails as inner parallel lines.
+        msp.add_line((ix0 + rail, deck_y0), (ix0 + rail, deck_y1), dxfattribs={"layer": "DECK"})
+        msp.add_line((ix1 - rail, deck_y0), (ix1 - rail, deck_y1), dxfattribs={"layer": "DECK"})
+        msp.add_line((ix0, deck_y0 + rail), (ix1, deck_y0 + rail), dxfattribs={"layer": "DECK"})
+
+        # Dashed projection lines from every glazing-frame joint down
+        # through the deck - the reference convention tying the folded
+        # glass wall to the deck it opens onto.
+        for x in _front_frame_joints(ix0, ix1, door_x0, door_x1)[1:-1]:
+            msp.add_line((x, oy - 60), (x, deck_y0),
+                         dxfattribs={"layer": "DECK", "linetype": "DASHED"})
+
+        # Deck depth on the right side (offset -350 puts the dimension line
+        # to the right of the deck edge; see _dim_chain_vertical on signs).
+        _dim(msp, (ix1, deck_y0), (ix1, deck_y1), -350, "DIMS")
+
+    # --- Door callout, centered in the deck / below the door ---
+    if sliding_door:
+        d_h = sliding_door.get("height_mm", 2250)
+        callout = f"D:{round(door_x1 - door_x0)}*{round(d_h)} mm"
+        callout_y = deck_bottom_y + 170 if deck else oy - 250
+        _mtext_simple(msp, callout, (door_x0 + door_x1) / 2.0, callout_y, 130, "TEXT")
+
+    # --- Stacked bottom dimension rows ---
+    bottom_dim_y = deck_bottom_y
+    if sliding_door:
+        row_y = bottom_dim_y - 350
+        joints = _front_frame_joints(ix0, ix1, door_x0, door_x1)
+        _dim_chain(msp, row_y, bottom_dim_y, joints, layer="DIMS")
+        _dim(msp, (ix0, bottom_dim_y), (ix1, bottom_dim_y), row_y - 350 - bottom_dim_y, "DIMS")
+        bottom_dim_y = row_y - 350
+
+    # --- Outermost dimensions: overall length above, overall width left ---
+    _dim(msp, (ox, oy + width), (ox + length, oy + width), 330, "DIMS")
+    _dim_chain_vertical(msp, ox - 330, ox, [oy, oy + width], layer="DIMS")
 
     title = plan.get("title")
-    _title_below(msp, title, ox + length / 2.0, bottom_dim_y - 400)
+    _title_below(msp, title, ox + length / 2.0, bottom_dim_y - 450)
 
 
 # ---------------------------------------------------------------------------
@@ -529,20 +632,26 @@ def draw_back_elevation(msp, spec, origin):
 # ---------------------------------------------------------------------------
 
 def _add_layers(doc):
+    # Monochrome, weight-differentiated linework matching the reference shop
+    # drawings: heavy container walls, medium fixtures, thin dimensions and
+    # texture. Color 7 renders black on white paper/preview (and follows the
+    # background convention in CAD viewers). Lineweight is in 1/100 mm.
     layer_defs = [
-        ("OUTLINE", 7),
-        ("KITCHEN", 3),
-        ("GLAZING", 5),
-        ("DIMS", 1),
-        ("TEXT", 2),
-        ("CORRUGATION", 8),
-        ("CALLOUTS", 6),
-        ("INSULATION", 8),
-        ("DOOR", 1),
+        ("OUTLINE", 50),
+        ("KITCHEN", 25),
+        ("GLAZING", 18),
+        ("DIMS", 13),
+        ("TEXT", 25),
+        ("CORRUGATION", 13),
+        ("CALLOUTS", 13),
+        ("INSULATION", 13),
+        ("DOOR", 25),
+        ("DECK", 35),
     ]
-    for name, color in layer_defs:
+    for name, lineweight in layer_defs:
         if name not in doc.layers:
-            doc.layers.add(name, color=color)
+            layer = doc.layers.add(name, color=7)
+            layer.dxf.lineweight = lineweight
 
 
 def build_doc(spec: dict, views: list | None = None):

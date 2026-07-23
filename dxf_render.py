@@ -156,7 +156,14 @@ def draw_measurement(
 
     label = text if text is not None else str(round(length(sub(p2, p1))))
     mid = scale(add(dim_p1, dim_p2), 0.5)
-    text_pos = add(mid, scale(side_vec, text_height * 0.7))
+    # Reference-drawing convention: text sits above horizontal dimension
+    # lines regardless of which side of the geometry the line is on; for
+    # vertical/steep dims it stays on the offset side.
+    if abs(direction[0]) >= abs(direction[1]):
+        text_vec = perpendicular if perpendicular[1] > 0 else scale(perpendicular, -1.0)
+    else:
+        text_vec = side_vec
+    text_pos = add(mid, scale(text_vec, text_height * 0.7))
 
     # Keep text upright and left-to-right regardless of measurement
     # direction - a wall traversed right-to-left would otherwise render
