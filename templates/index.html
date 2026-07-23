@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draftboard — Conversational CAD</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<header class="topbar">
+  <button class="brand" id="btn-home" type="button" aria-label="Draftboard home">
+    <span class="brand-mark">⌗</span>
+    <span class="brand-name">DRAFTBOARD</span>
+  </button>
+
+  <nav class="topbar-actions" id="dashboard-actions">
+    <button class="btn btn-ghost" id="btn-open-memory" type="button">Memory</button>
+    <button class="btn btn-primary" id="btn-new-floorplan" type="button">+ Floor Plan</button>
+    <button class="btn btn-primary" id="btn-new-container" type="button">+ Container Home</button>
+  </nav>
+
+  <nav class="topbar-actions" id="editor-actions" hidden>
+    <span class="save-indicator" id="save-indicator" data-state="unsaved">
+      <span class="save-dot"></span><span class="save-label">Unsaved</span>
+    </span>
+    <button class="btn btn-ghost" id="btn-open-memory-2" type="button">Memory</button>
+    <button class="btn btn-ghost" id="btn-save" type="button">Save</button>
+    <button class="btn btn-ghost" id="btn-download" type="button">Download .dxf</button>
+    <button class="btn btn-ghost" id="btn-librecad" type="button" disabled title="LibreCAD not detected on this machine">Open in LibreCAD</button>
+    <button class="btn btn-ghost" id="btn-back" type="button">← Dashboard</button>
+  </nav>
+</header>
+
+<main id="app">
+
+  <!-- ================= DASHBOARD VIEW ================= -->
+  <section id="dashboard-view" class="view">
+    <div class="grid-surface">
+      <div class="dashboard-head">
+        <h1 class="page-title">Your drawings</h1>
+        <p class="page-sub">Describe a floor plan or container home in plain English. Draftboard turns it into a real, editable DXF.</p>
+      </div>
+
+      <div id="dashboard-empty" class="empty-sheet" hidden>
+        <div class="empty-sheet-mark">＋</div>
+        <h2>Start your first drawing</h2>
+        <p>Pick a mode and describe what you want — Draftboard builds the geometry, you keep iterating conversationally.</p>
+        <div class="empty-sheet-actions">
+          <button class="btn btn-primary" id="empty-btn-floorplan" type="button">Floor Plan</button>
+          <button class="btn btn-primary" id="empty-btn-container" type="button">Container Home</button>
+        </div>
+        <div class="example-chips" id="example-chips-empty"></div>
+      </div>
+
+      <div id="dashboard-grid" class="dashboard-grid" hidden></div>
+    </div>
+  </section>
+
+  <!-- ================= EDITOR VIEW ================= -->
+  <section id="editor-view" class="view" hidden>
+    <div class="mode-strip">
+      <div class="mode-toggle" role="tablist" aria-label="Design mode">
+        <button class="mode-btn" data-mode="floorplan" role="tab" type="button">Floor Plan</button>
+        <button class="mode-btn" data-mode="container" role="tab" type="button">Container Home</button>
+      </div>
+      <input id="design-title" class="title-input" type="text" placeholder="Untitled drawing" maxlength="120" spellcheck="false">
+    </div>
+
+    <div class="editor-split">
+
+      <div class="chat-panel">
+        <div class="onboarding-note" id="onboarding-note">
+          <p><strong>Describe what you want, in plain English.</strong> Then keep going — "move the door left", "add a window", "make the counter longer".</p>
+          <div class="example-chips" id="example-chips-editor"></div>
+          <button class="onboarding-dismiss" id="onboarding-dismiss" type="button" aria-label="Dismiss">×</button>
+        </div>
+
+        <div class="chat-log" id="chat-log" aria-live="polite"></div>
+
+        <form class="chat-input-row" id="chat-form">
+          <textarea id="chat-input" rows="2" placeholder="Describe the design, or an edit to make…" required></textarea>
+          <button class="btn btn-primary" id="chat-send" type="submit">Send</button>
+        </form>
+      </div>
+
+      <div class="preview-panel">
+        <div class="preview-canvas-wrap" id="preview-canvas-wrap">
+          <div class="grid-surface preview-grid"></div>
+          <img id="preview-img" class="preview-img" alt="Generated drawing preview" draggable="false" hidden>
+          <div class="preview-empty" id="preview-empty">
+            <p>Your drawing will appear here.</p>
+          </div>
+          <div class="plot-sweep" id="plot-sweep" hidden>
+            <div class="plot-sweep-line"></div>
+            <span class="plot-sweep-label">PLOTTING…</span>
+          </div>
+          <div class="zoom-controls">
+            <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+            <button type="button" id="zoom-reset" aria-label="Reset zoom">100%</button>
+            <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+          </div>
+        </div>
+
+        <div class="titleblock" id="titleblock">
+          <div class="tb-cell tb-title">
+            <span class="tb-label">DWG</span>
+            <span class="tb-value" id="tb-dwg">UNTITLED</span>
+          </div>
+          <div class="tb-cell">
+            <span class="tb-label">MODE</span>
+            <span class="tb-value" id="tb-mode">FLOOR PLAN</span>
+          </div>
+          <div class="tb-cell">
+            <span class="tb-label">SCALE</span>
+            <span class="tb-value" id="tb-scale">NTS</span>
+          </div>
+          <div class="tb-cell">
+            <span class="tb-label">REV</span>
+            <span class="tb-value" id="tb-rev">0</span>
+          </div>
+          <div class="tb-cell">
+            <span class="tb-label">DATE</span>
+            <span class="tb-value" id="tb-date">—</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<!-- ================= MEMORY MODAL ================= -->
+<div class="modal-backdrop" id="memory-modal-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="memory-modal-title">
+    <div class="modal-head">
+      <h2 id="memory-modal-title">Memory</h2>
+      <button class="modal-close" id="memory-modal-close" type="button" aria-label="Close">×</button>
+    </div>
+    <p class="modal-sub">Patterns Draftboard remembers across sessions. Applied only where relevant — never over an explicit instruction.</p>
+
+    <h3 class="modal-section-title">Preferences</h3>
+    <ul class="pref-list" id="pref-list"></ul>
+    <form class="pref-add-form" id="pref-add-form">
+      <input type="text" id="pref-add-input" placeholder="e.g. always use 150mm wall thickness" maxlength="300">
+      <button class="btn btn-primary" type="submit">Add</button>
+    </form>
+
+    <h3 class="modal-section-title">Recent history</h3>
+    <ul class="history-list" id="history-list"></ul>
+
+    <div class="modal-foot">
+      <button class="btn btn-danger" id="btn-clear-memory" type="button">Clear all memory</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= SAVE-TITLE MODAL ================= -->
+<div class="modal-backdrop" id="save-modal-backdrop" hidden>
+  <div class="modal modal-narrow" role="dialog" aria-modal="true" aria-labelledby="save-modal-title">
+    <div class="modal-head">
+      <h2 id="save-modal-title">Name this drawing</h2>
+      <button class="modal-close" id="save-modal-close" type="button" aria-label="Close">×</button>
+    </div>
+    <form id="save-modal-form">
+      <input type="text" id="save-modal-input" placeholder="e.g. EMG Client — 20ft Kitchen Layout" maxlength="120" required>
+      <div class="modal-foot">
+        <button class="btn btn-primary" type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ================= TOAST ================= -->
+<div class="toast" id="toast" hidden></div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

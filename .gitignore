@@ -1,0 +1,11 @@
+# Secrets / local config
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local data + logs
+memory_data/
+server.log

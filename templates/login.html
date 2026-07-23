@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draftboard — Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="login-shell">
+  <div class="login-card">
+    <span class="brand-name">DRAFTBOARD</span>
+    <p>This workspace is password-protected. Enter the shared password to continue.</p>
+    <form method="post">
+      {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+      <input type="password" name="password" placeholder="Password" autofocus required>
+      <button class="btn btn-primary" type="submit">Sign in</button>
+    </form>
+  </div>
+</div>
+</body>
+</html>
