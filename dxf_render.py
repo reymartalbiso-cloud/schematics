@@ -121,6 +121,7 @@ def draw_measurement(
     gap=50,
     overshoot=50,
     tick_size=80,
+    text_shift=0,
 ):
     """Draw one dimension (extension lines, dimension line, end ticks, and
     the measurement text) between p1 and p2.
@@ -163,7 +164,9 @@ def draw_measurement(
         text_vec = perpendicular if perpendicular[1] > 0 else scale(perpendicular, -1.0)
     else:
         text_vec = side_vec
-    text_pos = add(mid, scale(text_vec, text_height * 0.7))
+    # text_shift lets chains stagger the labels of segments too narrow to
+    # hold their own text, so adjacent tiny segments don't overprint.
+    text_pos = add(mid, scale(text_vec, text_height * 0.7 + text_shift))
 
     # Keep text upright and left-to-right regardless of measurement
     # direction - a wall traversed right-to-left would otherwise render

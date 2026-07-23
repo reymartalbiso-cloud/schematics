@@ -38,18 +38,70 @@ def _wall_vectors(wall):
     return start, end, direction, perpendicular
 
 
-def _draw_walls(msp, walls):
+def _wall_opening_intervals(wall, openings):
+    """(lo, hi) distances along the wall for each opening on it, clamped to
+    the wall length and merged so overlapping openings cut one gap."""
+    start = tuple(wall["start"])
+    end = tuple(wall["end"])
+    length = _length(_sub(end, start))
+    raw = []
+    for op in openings:
+        if op.get("wall_id") != wall.get("id"):
+            continue
+        pos = op["position_along_wall"]
+        w = op["width"]
+        lo = max(0.0, pos - w / 2.0)
+        hi = min(length, pos + w / 2.0)
+        if hi > lo:
+            raw.append((lo, hi))
+    raw.sort()
+    merged = []
+    for lo, hi in raw:
+        if merged and lo <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+        else:
+            merged.append((lo, hi))
+    return merged
+
+
+def _draw_walls(msp, walls, openings):
     for wall in walls:
         start, end, direction, perpendicular = _wall_vectors(wall)
         half = wall["thickness"] / 2.0
         offset = _scale(perpendicular, half)
-        p1 = _add(start, offset)
-        p2 = _add(end, offset)
-        p3 = _sub(end, offset)
-        p4 = _sub(start, offset)
-        msp.add_lwpolyline(
-            [p1, p2, p3, p4], close=True, dxfattribs={"layer": "WALLS"}
-        )
+        length = _length(_sub(end, start))
+        intervals = _wall_opening_intervals(wall, openings)
+
+        if not intervals:
+            # No openings: a single closed rectangle reads as a solid wall.
+            p1, p2 = _add(start, offset), _add(end, offset)
+            p3, p4 = _sub(end, offset), _sub(start, offset)
+            msp.add_lwpolyline([p1, p2, p3, p4], close=True, dxfattribs={"layer": "WALLS"})
+            continue
+
+        # End caps.
+        msp.add_line(_add(start, offset), _sub(start, offset), dxfattribs={"layer": "WALLS"})
+        msp.add_line(_add(end, offset), _sub(end, offset), dxfattribs={"layer": "WALLS"})
+
+        def at(d):
+            return _add(start, _scale(direction, d))
+
+        # Both long faces, broken across each opening, with a jamb line
+        # spanning the wall thickness at every opening edge.
+        cursor = 0.0
+        for lo, hi in intervals:
+            if lo > cursor:
+                a, b = at(cursor), at(lo)
+                msp.add_line(_add(a, offset), _add(b, offset), dxfattribs={"layer": "WALLS"})
+                msp.add_line(_sub(a, offset), _sub(b, offset), dxfattribs={"layer": "WALLS"})
+            for edge in (lo, hi):
+                p = at(edge)
+                msp.add_line(_add(p, offset), _sub(p, offset), dxfattribs={"layer": "WALLS"})
+            cursor = hi
+        if cursor < length:
+            a, b = at(cursor), at(length)
+            msp.add_line(_add(a, offset), _add(b, offset), dxfattribs={"layer": "WALLS"})
+            msp.add_line(_sub(a, offset), _sub(b, offset), dxfattribs={"layer": "WALLS"})
 
 
 def _wall_by_id(walls, wall_id):
@@ -146,11 +198,38 @@ def _draw_rooms(msp, rooms):
 # by hand instead, from the same LINE/MTEXT primitives already proven to
 # render identically everywhere. Sized to sit in the same neighborhood as
 # room-label text (char_height 200).
-def _draw_dimensions(msp, dimensions):
+def _walls_bbox_center(walls):
+    xs, ys = [], []
+    for wall in walls:
+        for pt in (wall["start"], wall["end"]):
+            xs.append(pt[0])
+            ys.append(pt[1])
+    if not xs:
+        return None
+    return ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0)
+
+
+def _draw_dimensions(msp, dimensions, walls):
+    center = _walls_bbox_center(walls)
     for dim in dimensions:
         start = tuple(dim["start"])
         end = tuple(dim["end"])
         offset = dim["offset"]
+        # Claude can't reliably know which offset sign points away from the
+        # room (it depends on each wall's start->end direction), so dimension
+        # lines sometimes land inside the plan, colliding with openings and
+        # labels. Deterministically pick the sign that pushes the dimension
+        # line away from the plan's center - always outward for perimeter
+        # walls, and a harmless coin-flip for genuinely interior ones.
+        if center is not None and offset:
+            direction = _unit(_sub(end, start))
+            perpendicular = _perp(direction)
+            mid = _scale(_add(start, end), 0.5)
+            cand_pos = _add(mid, _scale(perpendicular, abs(offset)))
+            cand_neg = _sub(mid, _scale(perpendicular, abs(offset)))
+            dist_pos = _length(_sub(cand_pos, center))
+            dist_neg = _length(_sub(cand_neg, center))
+            offset = abs(offset) if dist_pos >= dist_neg else -abs(offset)
         draw_measurement(
             msp, start, end, offset, "DIMS",
             text_height=180, gap=80, overshoot=80, tick_size=120,
@@ -175,10 +254,10 @@ def build_doc(spec: dict):
     rooms = spec.get("rooms", []) or []
     dimensions = spec.get("dimensions", []) or []
 
-    _draw_walls(msp, walls)
+    _draw_walls(msp, walls, openings)
     _draw_openings(msp, walls, openings)
     _draw_rooms(msp, rooms)
-    _draw_dimensions(msp, dimensions)
+    _draw_dimensions(msp, dimensions, walls)
 
     return doc
 

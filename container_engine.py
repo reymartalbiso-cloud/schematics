@@ -48,10 +48,10 @@ DIM_GAP = 50
 DIM_OVERSHOOT = 50
 
 
-def _dim(msp, p1, p2, offset, layer="DIMS", text=None):
+def _dim(msp, p1, p2, offset, layer="DIMS", text=None, text_shift=0):
     draw_measurement(
         msp, p1, p2, offset, layer,
-        text=text,
+        text=text, text_shift=text_shift,
         text_height=DIM_TEXT_HEIGHT, gap=DIM_GAP, overshoot=DIM_OVERSHOOT, tick_size=DIM_TICK_SIZE,
     )
 
@@ -126,13 +126,13 @@ def _draw_container_walls(msp, ox, oy, length, width, thickness, glass_front=Fal
     ix0, iy0 = ox + thickness, oy + thickness
     ix1, iy1 = ox + length - thickness, oy + width - thickness
 
-    bottom_gap = (ox, ox + length) if glass_front else None
-    _rect_open_sides(msp, ox, oy, ox + length, oy + width, "OUTLINE", bottom_gap=bottom_gap)
-    _rect_open_sides(msp, ix0, iy0, ix1, iy1, "OUTLINE", bottom_gap=bottom_gap)
-    if glass_front:
-        # Close the exposed wall-cavity ends at the front corners.
-        msp.add_line((ox, oy), (ix0, oy), dxfattribs={"layer": "OUTLINE"})
-        msp.add_line((ix1, oy), (ox + length, oy), dxfattribs={"layer": "OUTLINE"})
+    # The outer outline is always fully closed - the container envelope is
+    # exactly what the overall dimensions measure. With a glass front, the
+    # front wall band (between oy and iy0) is drawn by the caller as a
+    # glazing frame instead of an insulated cavity, INSIDE the envelope.
+    _rect_open_sides(msp, ox, oy, ox + length, oy + width, "OUTLINE")
+    inner_gap = (ox, ox + length) if glass_front else None
+    _rect_open_sides(msp, ix0, iy0, ix1, iy1, "OUTLINE", bottom_gap=inner_gap)
 
     # Left and right wall cavities always run their full extent.
     _insulation_fill(msp, ox, oy, ix0, oy + width)
@@ -153,13 +153,19 @@ def _draw_container_walls(msp, ox, oy, length, width, thickness, glass_front=Fal
     return ix0, iy0, ix1, iy1
 
 
-def _front_frame_joints(frame_x0, frame_x1, door_x0, door_x1, post=100, gap=50):
-    """X positions of the glazing-frame joints across the front wall:
-    end post | side panel | gap | sliding door | gap | side panel | end post.
-    Matches the reference breakdown (e.g. 100/1654/50/2000/50/1654/100)."""
-    joints = [frame_x0, frame_x0 + post, door_x0 - gap, door_x0, door_x1, door_x1 + gap, frame_x1 - post, frame_x1]
-    # Collapse out-of-order joints (door hard against one end, tiny panels).
-    return sorted(set(x for x in joints if frame_x0 <= x <= frame_x1))
+def _front_frame_joints(ox, length, wall_t, doors, partition_faces=(), gap=50):
+    """X positions of the front-wall breakdown joints, anchored at the
+    EXTERIOR faces so the chain always sums to the container's overall
+    length (wall / panel / 50 gap / door / 50 gap / ... / wall), with
+    partition-wall faces folded in when a bathroom exists. Extension lines
+    therefore always land on drawn geometry, and the bottom chain can never
+    contradict the top overall dimension."""
+    x0, x1 = ox, ox + length
+    joints = {x0, x0 + wall_t, x1 - wall_t, x1}
+    for dx0, dx1 in doors:
+        joints.update((dx0 - gap, dx0, dx1, dx1 + gap))
+    joints.update(partition_faces)
+    return sorted(j for j in joints if x0 <= j <= x1)
 
 
 def _mtext_simple(msp, text, x, y, height, layer):
@@ -197,9 +203,27 @@ def _dim_chain(msp, base_offset, points_y, xs, layer="DIMS"):
         dimension segments).
     points_y: the y coordinate of the measured line (p1/p2).
     base_offset: the y coordinate of the dimension line itself.
+
+    Segments too narrow to hold their own label get their text staggered
+    upward in alternation, so two adjacent tiny segments (e.g. a 50 gap
+    next to a 60 wall) don't overprint into an illegible blob.
     """
+    prev_narrow = False
     for i in range(len(xs) - 1):
-        _dim(msp, (xs[i], points_y), (xs[i + 1], points_y), base_offset - points_y, layer)
+        seg_w = xs[i + 1] - xs[i]
+        label_w = len(str(round(seg_w))) * DIM_TEXT_HEIGHT * 0.62
+        if seg_w < label_w * 1.3:
+            # Narrow segment: always lift the label to a raised row so it
+            # clears the baseline text of wider neighbors; two consecutive
+            # narrow labels alternate between two raised rows so they never
+            # merge with each other either.
+            shift = DIM_TEXT_HEIGHT * (2.4 if prev_narrow else 1.2)
+            prev_narrow = not prev_narrow
+        else:
+            shift = 0
+            prev_narrow = False
+        _dim(msp, (xs[i], points_y), (xs[i + 1], points_y), base_offset - points_y, layer,
+             text_shift=shift)
 
 
 def _dim_chain_vertical(msp, base_offset, points_x, ys, layer="DIMS"):
@@ -310,6 +334,145 @@ def _draw_fridge_symbol(msp, x0, y0, x1, y1, layer, text_layer):
 
 
 # ---------------------------------------------------------------------------
+# Bathroom (partition + fixture symbols, per the reference packages)
+# ---------------------------------------------------------------------------
+
+def _draw_toilet(msp, cx, wall_y, layer):
+    """Toilet in plan: cistern against the back wall + bowl ellipse facing
+    into the room (downward from wall_y)."""
+    tank_w, tank_d = 420, 130
+    _rect(msp, cx - tank_w / 2.0, wall_y - tank_d, cx + tank_w / 2.0, wall_y, layer)
+    bowl_len, bowl_w = 430, 350
+    msp.add_ellipse(
+        center=(cx, wall_y - tank_d - bowl_len / 2.0),
+        major_axis=(0, bowl_len / 2.0),
+        ratio=bowl_w / bowl_len,
+        dxfattribs={"layer": layer},
+    )
+
+
+def _draw_toilet_side(msp, wall_x, cy, into_room_sign, layer):
+    """Toilet mounted on a side (end) wall: cistern against wall_x, bowl
+    pointing into the room along into_room_sign (+1 = +x, -1 = -x)."""
+    tank_w, tank_d = 420, 130
+    _rect(msp, min(wall_x, wall_x + into_room_sign * tank_d), cy - tank_w / 2.0,
+          max(wall_x, wall_x + into_room_sign * tank_d), cy + tank_w / 2.0, layer)
+    bowl_len, bowl_w = 430, 350
+    msp.add_ellipse(
+        center=(wall_x + into_room_sign * (tank_d + bowl_len / 2.0), cy),
+        major_axis=(bowl_len / 2.0, 0),
+        ratio=bowl_w / bowl_len,
+        dxfattribs={"layer": layer},
+    )
+
+
+def _draw_shower(msp, x0, y0, x1, y1, layer):
+    """Shower tray: square enclosure with corner-to-corner diagonals and a
+    center drain circle."""
+    _rect(msp, x0, y0, x1, y1, layer)
+    msp.add_line((x0, y0), (x1, y1), dxfattribs={"layer": layer})
+    msp.add_line((x0, y1), (x1, y0), dxfattribs={"layer": layer})
+    msp.add_circle(center=((x0 + x1) / 2.0, (y0 + y1) / 2.0), radius=40, dxfattribs={"layer": layer})
+
+
+def _draw_basin(msp, x0, y0, x1, y1, layer):
+    """Basin: small counter rectangle with an oval bowl inside."""
+    _rect(msp, x0, y0, x1, y1, layer)
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    major = (x1 - x0) * 0.36
+    ratio = min(1.0, ((y1 - y0) * 0.32) / major)
+    msp.add_ellipse(center=(cx, cy), major_axis=(major, 0), ratio=ratio, dxfattribs={"layer": layer})
+
+
+def _draw_bathroom(msp, bathroom, ix0, ix1, y_front, y_back, wall_t=60):
+    """Enclosed bathroom at one container end: insulated partition wall with
+    a swing door near the front, and fixture symbols (shower in the back
+    corner, toilet on the end wall when the room is wide enough - matching
+    "on the wall" phrasing - else against the back wall, basin above the
+    door swing).
+
+    Returns both partition faces (x0, x1) for the bottom dimension chain.
+    """
+    width = bathroom.get("width_mm", 1200)
+    right = bathroom.get("position", "right") != "left"
+    fixtures = [str(f).lower() for f in (bathroom.get("fixtures") or ["toilet", "shower", "basin"])]
+
+    if right:
+        bx0, bx1 = ix1 - width, ix1
+        px0, px1 = bx0 - wall_t, bx0
+    else:
+        bx0, bx1 = ix0, ix0 + width
+        px0, px1 = bx1, bx1 + wall_t
+
+    # Partition wall with a door opening near the front.
+    door_w = max(600, min(750, (y_back - y_front) * 0.4))
+    gap_y0 = y_front + 150
+    gap_y1 = gap_y0 + door_w
+    for x in (px0, px1):
+        msp.add_line((x, y_front), (x, gap_y0), dxfattribs={"layer": "OUTLINE"})
+        msp.add_line((x, gap_y1), (x, y_back), dxfattribs={"layer": "OUTLINE"})
+    msp.add_line((px0, gap_y0), (px1, gap_y0), dxfattribs={"layer": "OUTLINE"})
+    msp.add_line((px0, gap_y1), (px1, gap_y1), dxfattribs={"layer": "OUTLINE"})
+    _insulation_fill(msp, px0, y_front, px1, gap_y0)
+    _insulation_fill(msp, px0, gap_y1, px1, y_back)
+
+    # Door leaf swinging into the bathroom, hinged at the opening's back edge.
+    if right:
+        hinge = (px1, gap_y1)
+        leaf_tip = (px1 + door_w, gap_y1)
+        start_angle, end_angle = 270, 360
+    else:
+        hinge = (px0, gap_y1)
+        leaf_tip = (px0 - door_w, gap_y1)
+        start_angle, end_angle = 180, 270
+    msp.add_line(hinge, leaf_tip, dxfattribs={"layer": "DOOR"})
+    msp.add_arc(center=hinge, radius=door_w, start_angle=start_angle, end_angle=end_angle,
+                dxfattribs={"layer": "DOOR"})
+
+    # Fixture layout (matches the reference container bathrooms and honors
+    # "toilet on the right/left-hand wall"): the TOILET takes the end wall,
+    # the SHOWER the partition-side back corner, the BASIN the partition-side
+    # front. The end wall is the container end; the partition side is the
+    # interior wall dividing the bathroom from the rest of the home.
+    s = max(500, min(850, width * 0.5, (y_back - y_front) * 0.42))
+    end_wall_x = bx1 if right else bx0
+    into_room = -1 if right else 1
+    # partition-side back-corner shower rectangle
+    sh = (bx0, y_back - s, bx0 + s, y_back) if right else (bx1 - s, y_back - s, bx1, y_back)
+
+    if "shower" in fixtures:
+        _draw_shower(msp, *sh, "KITCHEN")
+
+    if "basin" in fixtures:
+        bw, bd = min(460, width - 200), 360
+        by0 = gap_y1 + 120
+        # Front of the room, partition side, clear of the back-corner shower.
+        top_limit = (y_back - s - 80) if "shower" in fixtures else (y_back - 80)
+        if bw > 0 and by0 + bd <= top_limit:
+            if right:
+                _draw_basin(msp, bx0, by0, bx0 + bw, by0 + bd, "KITCHEN")
+            else:
+                _draw_basin(msp, bx1 - bw, by0, bx1, by0 + bd, "KITCHEN")
+
+    if "toilet" in fixtures:
+        # End wall by default (bowl projects into the room), centered in the
+        # clear vertical span. Narrow rooms fall back to the back wall in the
+        # stretch the shower didn't take.
+        toilet_on_end = width >= 900 and (y_back - gap_y1) >= 700
+        if toilet_on_end:
+            _draw_toilet_side(msp, end_wall_x, (gap_y1 + y_back) / 2.0, into_room, "KITCHEN")
+        else:
+            if "shower" in fixtures:
+                span = (bx0 + s, bx1) if right else (bx0, bx1 - s)
+            else:
+                span = (bx0, bx1)
+            if span[1] - span[0] >= 450:
+                _draw_toilet(msp, (span[0] + span[1]) / 2.0, y_back, "KITCHEN")
+
+    return (px0, px1)
+
+
+# ---------------------------------------------------------------------------
 # Plan view
 # ---------------------------------------------------------------------------
 
@@ -327,16 +490,22 @@ def draw_plan_view(msp, spec, origin):
 
     plan = spec.get("plan", {})
     kitchen_run = plan.get("kitchen_run")
-    sliding_door = plan.get("sliding_door")
     windows = plan.get("windows") or []
     deck = plan.get("deck")
+    bathroom = plan.get("bathroom")
 
-    door_x0 = door_x1 = None
-    if sliding_door:
-        door_width = sliding_door.get("width_mm", 0)
-        pos_from_left = sliding_door.get("position_from_left_mm", 0)
-        door_x0 = ox + pos_from_left
-        door_x1 = door_x0 + door_width
+    # One or several sliding doors: plan.sliding_door (single) and
+    # plan.sliding_doors (array) merge into one sorted list.
+    door_specs = []
+    single = plan.get("sliding_door")
+    if single:
+        door_specs.append(single)
+    door_specs.extend(plan.get("sliding_doors") or [])
+    doors = []
+    for d in door_specs:
+        d_x0 = ox + d.get("position_from_left_mm", 0)
+        doors.append((d_x0, d_x0 + d.get("width_mm", 0), d))
+    doors.sort(key=lambda t: t[0])
 
     back_gaps = []
     for win in windows:
@@ -345,10 +514,13 @@ def draw_plan_view(msp, spec, origin):
 
     ix0, iy0, ix1, iy1 = _draw_container_walls(
         msp, ox, oy, length, width, thickness,
-        glass_front=bool(sliding_door), back_gaps=back_gaps,
+        glass_front=bool(doors), back_gaps=back_gaps,
     )
 
     # --- Back (top) wall windows: jambs, slider panes, dim, W: callout ---
+    # Width dim and callout stack ABOVE the wall (the kitchen band sits
+    # directly beneath it inside, so an interior dim would strike through
+    # the fixtures), with the overall length dim moved a row further out.
     for win, (w_x0, w_x1) in zip(windows, back_gaps):
         msp.add_line((w_x0, iy1), (w_x0, oy + width), dxfattribs={"layer": "OUTLINE"})
         msp.add_line((w_x1, iy1), (w_x1, oy + width), dxfattribs={"layer": "OUTLINE"})
@@ -359,9 +531,22 @@ def draw_plan_view(msp, spec, origin):
         y_hi = iy1 + thickness * 0.7
         msp.add_line((w_x0, y_hi), (mid_x + (w_x1 - w_x0) * 0.05, y_hi), dxfattribs={"layer": "GLAZING"})
         msp.add_line((mid_x - (w_x1 - w_x0) * 0.05, y_lo), (w_x1, y_lo), dxfattribs={"layer": "GLAZING"})
-        _dim(msp, (w_x0, iy1), (w_x1, iy1), -160, "DIMS")
+        _dim(msp, (w_x0, oy + width), (w_x1, oy + width), 150, "DIMS")
         callout = f"W:{round(win.get('width_mm', 0))}*{round(win.get('height_mm', 0))}mm"
-        _mtext_simple(msp, callout, (w_x0 + w_x1) / 2.0, oy + width + 170, 110, "TEXT")
+        _mtext_simple(msp, callout, (w_x0 + w_x1) / 2.0, oy + width + 400, 110, "TEXT")
+
+    # --- Bathroom at one end (partition + swing door + fixture symbols) ---
+    partition_faces = ()
+    kitchen_x0 = ix0
+    kitchen_x1 = ix1
+    if bathroom:
+        y_front = oy if doors else iy0
+        partition_faces = _draw_bathroom(msp, bathroom, ix0, ix1, y_front, iy1, thickness)
+        # Keep the kitchen run out of the bathroom's floor area.
+        if bathroom.get("position", "right") == "left":
+            kitchen_x0 = ix0 + bathroom.get("width_mm", 1200) + thickness
+        else:
+            kitchen_x1 = ix1 - bathroom.get("width_mm", 1200) - thickness
 
     # --- Kitchen run along the back (top) wall ---
     if kitchen_run:
@@ -371,7 +556,7 @@ def draw_plan_view(msp, spec, origin):
             band_y1 = iy1
             band_y0 = band_y1 - depth
             mid_y = (band_y0 + band_y1) / 2.0
-            cursor_x = ix0
+            cursor_x = kitchen_x0
             boundary_xs = [cursor_x]
             centerline_end = None  # trims the dashed midline before a trailing fridge
 
@@ -405,31 +590,43 @@ def draw_plan_view(msp, spec, origin):
 
             # Counter front edge facing the room, plus the dashed midline the
             # references use to mark the counter's centerline.
-            msp.add_line((ix0, band_y0), (cursor_x, band_y0), dxfattribs={"layer": "KITCHEN"})
-            msp.add_line((ix0, mid_y), (centerline_end or cursor_x, mid_y),
+            msp.add_line((kitchen_x0, band_y0), (cursor_x, band_y0), dxfattribs={"layer": "KITCHEN"})
+            msp.add_line((kitchen_x0, mid_y), (centerline_end or cursor_x, mid_y),
                          dxfattribs={"layer": "KITCHEN", "linetype": "DASHED"})
+
+            # Tie the chain out to the room's end so the run reconciles with
+            # the overall width: a trailing gap between the last fixture and
+            # the wall (or bathroom partition) gets its own dimension instead
+            # of being left as an unexplained short-fall under the overall.
+            if kitchen_x1 - cursor_x > 50:
+                boundary_xs.append(kitchen_x1)
 
             # Segment chain just below the counter, inside the room.
             _dim_chain(msp, band_y0 - 250, band_y0, boundary_xs, layer="DIMS")
 
-    # --- Front (bottom) glazing-frame wall with sliding door ---
-    if sliding_door:
-        frame_y1 = oy
-        frame_y0 = oy - 60
-        joints = _front_frame_joints(ix0, ix1, door_x0, door_x1)
-        msp.add_line((ix0, frame_y1), (ix1, frame_y1), dxfattribs={"layer": "GLAZING"})
-        msp.add_line((ix0, frame_y0), (ix1, frame_y0), dxfattribs={"layer": "GLAZING"})
+    # --- Front (bottom) glazing-frame wall with sliding door(s) ---
+    # The frame band occupies the wall cavity zone (oy..iy0), INSIDE the
+    # container envelope, so the drawn exterior depth always matches the
+    # dimensioned width - nothing protrudes below the outline.
+    door_ranges = [(d0, d1) for d0, d1, _ in doors]
+    if doors:
+        joints = _front_frame_joints(ox, length, thickness, door_ranges, partition_faces)
+        msp.add_line((ix0, iy0), (ix1, iy0), dxfattribs={"layer": "GLAZING"})
         for x in joints:
-            msp.add_line((x, frame_y0), (x, frame_y1), dxfattribs={"layer": "GLAZING"})
-        # Sliding door: heavier double track lines across its opening.
-        msp.add_line((door_x0, frame_y0 + 15), (door_x1, frame_y0 + 15), dxfattribs={"layer": "DOOR"})
-        msp.add_line((door_x0, frame_y1 - 15), (door_x1, frame_y1 - 15), dxfattribs={"layer": "DOOR"})
+            if ix0 < x < ix1:
+                msp.add_line((x, oy), (x, iy0), dxfattribs={"layer": "GLAZING"})
+        # Each sliding door: heavier double track lines across its opening.
+        for d_x0, d_x1, _ in doors:
+            msp.add_line((d_x0, oy + thickness * 0.3), (d_x1, oy + thickness * 0.3),
+                         dxfattribs={"layer": "DOOR"})
+            msp.add_line((d_x0, oy + thickness * 0.7), (d_x1, oy + thickness * 0.7),
+                         dxfattribs={"layer": "DOOR"})
 
     # --- Fold-out deck below the front wall ---
     deck_bottom_y = oy
-    if deck and sliding_door:
+    if deck and doors:
         deck_depth = deck.get("depth_mm", 2262)
-        deck_y1 = oy - 60
+        deck_y1 = oy
         deck_y0 = deck_y1 - deck_depth
         deck_bottom_y = deck_y0
         rail = 60
@@ -443,32 +640,41 @@ def draw_plan_view(msp, spec, origin):
         # Dashed projection lines from every glazing-frame joint down
         # through the deck - the reference convention tying the folded
         # glass wall to the deck it opens onto.
-        for x in _front_frame_joints(ix0, ix1, door_x0, door_x1)[1:-1]:
-            msp.add_line((x, oy - 60), (x, deck_y0),
-                         dxfattribs={"layer": "DECK", "linetype": "DASHED"})
+        for x in _front_frame_joints(ox, length, thickness, door_ranges, partition_faces):
+            if ix0 < x < ix1:
+                msp.add_line((x, oy), (x, deck_y0),
+                             dxfattribs={"layer": "DECK", "linetype": "DASHED"})
 
         # Deck depth on the right side (offset -350 puts the dimension line
         # to the right of the deck edge; see _dim_chain_vertical on signs).
         _dim(msp, (ix1, deck_y0), (ix1, deck_y1), -350, "DIMS")
 
-    # --- Door callout, centered in the deck / below the door ---
-    if sliding_door:
-        d_h = sliding_door.get("height_mm", 2250)
-        callout = f"D:{round(door_x1 - door_x0)}*{round(d_h)} mm"
-        callout_y = deck_bottom_y + 170 if deck else oy - 250
-        _mtext_simple(msp, callout, (door_x0 + door_x1) / 2.0, callout_y, 130, "TEXT")
+    # --- Door callouts, centered in the deck / just inside the room ---
+    for d_x0, d_x1, d in doors:
+        d_h = d.get("height_mm", 2250)
+        callout = f"D:{round(d_x1 - d_x0)}*{round(d_h)} mm"
+        # With a deck the callout sits inside it (reference convention).
+        # Without one it goes inside the room above the door - below the
+        # wall it would land exactly on the joint-chain text row.
+        callout_y = deck_bottom_y + 170 if deck else iy0 + 200
+        _mtext_simple(msp, callout, (d_x0 + d_x1) / 2.0, callout_y, 130, "TEXT")
 
-    # --- Stacked bottom dimension rows ---
+    # --- Bottom breakdown chain, anchored exterior-to-exterior ---
+    # Sums to the container's overall length by construction, so it can
+    # never contradict the top overall dimension (no separate bottom
+    # overall row is needed - the top one already gives the total).
     bottom_dim_y = deck_bottom_y
-    if sliding_door:
+    if doors or partition_faces:
         row_y = bottom_dim_y - 350
-        joints = _front_frame_joints(ix0, ix1, door_x0, door_x1)
+        joints = _front_frame_joints(ox, length, thickness, door_ranges, partition_faces)
         _dim_chain(msp, row_y, bottom_dim_y, joints, layer="DIMS")
-        _dim(msp, (ix0, bottom_dim_y), (ix1, bottom_dim_y), row_y - 350 - bottom_dim_y, "DIMS")
-        bottom_dim_y = row_y - 350
+        bottom_dim_y = row_y - 380
 
     # --- Outermost dimensions: overall length above, overall width left ---
-    _dim(msp, (ox, oy + width), (ox + length, oy + width), 330, "DIMS")
+    # Back-wall window width dims + "W:" callouts stack above the top wall
+    # (to +400); lift the overall-length dimension clear of them.
+    top_offset = 700 if windows else 330
+    _dim(msp, (ox, oy + width), (ox + length, oy + width), top_offset, "DIMS")
     _dim_chain_vertical(msp, ox - 330, ox, [oy, oy + width], layer="DIMS")
 
     title = plan.get("title")
@@ -786,6 +992,69 @@ def _add_layers(doc):
             layer.dxf.lineweight = lineweight
 
 
+def _derive_elevation_sections(spec: dict) -> dict:
+    """Fill in missing elevation sections from what the plan already knows,
+    so "Generate elevations too" shows the actual design (glass front wall,
+    fold-out floor, back-wall windows) instead of empty container shells.
+    Explicit elevation sections from the spec always win. Returns a copy;
+    the client's spec is never mutated."""
+    plan = spec.get("plan", {})
+    out = dict(spec)
+    container = spec.get("container", {})
+    length = container.get("length_mm", 6058)
+    t = container.get("wall_thickness_mm", DEFAULT_WALL_THICKNESS_MM)
+
+    # Gather all doors (single + array) the same way the plan view does.
+    door_specs = []
+    if plan.get("sliding_door"):
+        door_specs.append(plan["sliding_door"])
+    door_specs.extend(plan.get("sliding_doors") or [])
+    door_specs = sorted(door_specs, key=lambda d: d.get("position_from_left_mm", 0))
+
+    if "front_elevation" not in out and door_specs:
+        # Walk across the interior width, emitting a fixed-glass panel for
+        # each stretch between doors and a sliding-glass panel per door - so
+        # a two-door request renders two sliding bays, not one.
+        interior_x0, interior_x1 = t, length - t
+        panels = []
+        cursor = interior_x0
+        for d in door_specs:
+            d_x0 = d.get("position_from_left_mm", 0)
+            d_x1 = d_x0 + d.get("width_mm", 0)
+            if d_x0 - cursor > 1:
+                panels.append({"width_mm": d_x0 - cursor, "type": "fixed_glass"})
+            panels.append({"width_mm": max(0.0, d_x1 - d_x0), "type": "sliding_glass"})
+            cursor = d_x1
+        if interior_x1 - cursor > 1:
+            panels.append({"width_mm": interior_x1 - cursor, "type": "fixed_glass"})
+        out["front_elevation"] = {"title": "Front Elevation", "glazing_panels": panels}
+
+    if "side_elevation" not in out and plan.get("deck"):
+        depth = plan["deck"].get("depth_mm", 2262)
+        out["side_elevation"] = {
+            "title": "Side Elevation",
+            "fold_out_platform": {"width_mm": depth, "swing_radius_mm": depth + 190},
+            "floor_extension_label": "fold-out floor",
+        }
+
+    windows = plan.get("windows") or []
+    if "back_elevation" not in out and windows:
+        w = windows[0]
+        out["back_elevation"] = {
+            "title": "Back Elevation",
+            "vent_window": {
+                "width_mm": w.get("width_mm", 600),
+                "height_mm": w.get("height_mm", 600),
+                "position_from_left_mm": w.get("position_from_left_mm", 0),
+                # Sill height isn't modeled in plan; a kitchen-window head
+                # height around 1500 center is the references' convention.
+                "center_height_mm": 1500,
+            },
+        }
+
+    return out
+
+
 def build_doc(spec: dict, views: list | None = None):
     """Build and return an ezdxf Drawing object from a container-home spec dict.
 
@@ -802,6 +1071,8 @@ def build_doc(spec: dict, views: list | None = None):
     _add_layers(doc)
 
     requested = set(views) if views else set(DEFAULT_VIEWS)
+    if requested - {"plan"}:
+        spec = _derive_elevation_sections(spec)
 
     container = spec.get("container", {})
     length = container.get("length_mm", 6058)
@@ -818,8 +1089,9 @@ def build_doc(spec: dict, views: list | None = None):
     if "plan" in requested:
         draw_plan_view(msp, spec, (0, cursor_y))
         plan = spec.get("plan", {})
+        has_door = bool(plan.get("sliding_door") or plan.get("sliding_doors"))
         deck_drop = 0
-        if plan.get("deck") and plan.get("sliding_door"):
+        if plan.get("deck") and has_door:
             deck_drop = plan["deck"].get("depth_mm", 2262) + 60
         cursor_y = cursor_y - deck_drop - BELOW_MARGIN_MM - ROW_GAP_MM
 

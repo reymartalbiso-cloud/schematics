@@ -113,12 +113,30 @@ CONTAINER_SCHEMA = {
                 },
                 "sliding_door": {
                     "type": "object",
+                    "description": "A single sliding door on the front wall. For more than one door, use sliding_doors instead.",
                     "properties": {
                         "width_mm": {"type": "number"},
                         "position_from_left_mm": {"type": "number"},
                         "height_mm": {"type": "number"},
                     },
                     "required": ["width_mm", "position_from_left_mm"],
+                },
+                "sliding_doors": {
+                    "type": "array",
+                    "description": (
+                        "Multiple sliding doors on the front wall. Use this (not "
+                        "sliding_door) whenever the user asks for two or more doors, "
+                        "giving each its own position so they don't overlap."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "width_mm": {"type": "number"},
+                            "position_from_left_mm": {"type": "number"},
+                            "height_mm": {"type": "number"},
+                        },
+                        "required": ["width_mm", "position_from_left_mm"],
+                    },
                 },
                 "windows": {
                     "type": "array",
@@ -144,6 +162,27 @@ CONTAINER_SCHEMA = {
                     ),
                     "properties": {"depth_mm": {"type": "number"}},
                     "required": ["depth_mm"],
+                },
+                "bathroom": {
+                    "type": "object",
+                    "description": (
+                        "Enclosed bathroom at one end of the container, drawn with a "
+                        "partition wall, a swing door, and real fixture symbols. Any "
+                        "bathroom fixtures (toilet, shower, basin) belong HERE - never "
+                        "as kitchen_run segments."
+                    ),
+                    "properties": {
+                        "width_mm": {
+                            "type": "number",
+                            "description": "Interior width of the bathroom along the container length.",
+                        },
+                        "position": {"type": "string", "enum": ["left", "right"]},
+                        "fixtures": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["toilet", "shower", "basin"]},
+                        },
+                    },
+                    "required": ["width_mm", "position"],
                 },
             },
         },
@@ -243,8 +282,14 @@ CONTAINER_SYSTEM_PROMPT = (
     "spec via the emit_container_home_spec tool. You never draw anything yourself - a "
     "separate deterministic renderer turns your JSON into a multi-view shop-drawing "
     "sheet. The schema is a vocabulary, not a template: only include a section (kitchen "
-    "run, sliding door, glazing pattern, fold-out platform, vent window, etc.) when the "
-    "user's request implies it.\n" + _SHARED_RULES
+    "run, sliding door, glazing pattern, fold-out platform, vent window, bathroom, etc.) "
+    "when the user's request implies it.\n"
+    "- kitchen_run segments are strictly kitchen elements (hob/stove, counter, cabinet, "
+    "sink, fridge). Bathroom fixtures (toilet, shower, basin) always go in plan.bathroom "
+    "- never as kitchen_run segments.\n"
+    "- When the user resizes the container (e.g. 20ft -> 40ft), update container "
+    "dimensions and re-check that positioned elements (sliding door, windows, deck) "
+    "still sit sensibly within the new length.\n" + _SHARED_RULES
 )
 
 
