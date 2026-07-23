@@ -226,6 +226,7 @@
       dismissOnboarding(true);
       renderTitleblock();
       updateElevationsButton();
+      updateSaveAsButton();
       showView("editor");
     } catch (err) {
       toast(err.message, "error");
@@ -265,6 +266,7 @@
     setSaveIndicator(false);
     updateModeButtons();
     updateElevationsButton();
+    updateSaveAsButton();
     renderExampleChips();
     renderTitleblock();
   }
@@ -536,10 +538,17 @@
     await performSave(el.designTitle.value.trim() || "Untitled drawing");
   });
 
-  function openSaveModal() {
-    el.saveInput.value = el.designTitle.value.trim();
+  // When true, the next save-modal submit forks a new record instead of
+  // updating the current one ("Save as new").
+  let saveAsNewPending = false;
+
+  function openSaveModal(forkMode = false) {
+    saveAsNewPending = forkMode;
+    const current = el.designTitle.value.trim() || state.currentTitle;
+    el.saveInput.value = forkMode && current ? `Copy of ${current}` : current;
     el.saveBackdrop.hidden = false;
     el.saveInput.focus();
+    el.saveInput.select();
   }
   wireModal(el.saveBackdrop, "save-modal-close");
   el.saveForm.addEventListener("submit", async (e) => {
@@ -548,27 +557,40 @@
     if (!title) return;
     el.saveBackdrop.hidden = true;
     el.designTitle.value = title;
-    await performSave(title);
+    await performSave(title, saveAsNewPending);
+    saveAsNewPending = false;
   });
 
-  async function performSave(title) {
+  async function performSave(title, asNew = false) {
     try {
       const meta = await postJSON("/api/designs", {
         mode: state.mode,
         title,
         spec: state.currentSpec,
-        id: state.currentDesignId,
+        id: asNew ? null : state.currentDesignId,
       });
       state.currentDesignId = meta.id;
       state.currentTitle = meta.title;
       state.dirty = false;
       setSaveIndicator(true);
       renderTitleblock();
-      toast("Saved.");
+      updateSaveAsButton();
+      toast(asNew ? "Saved as a new design." : "Saved.");
     } catch (err) {
       toast(err.message, "error");
     }
   }
+
+  // "Save as new" forks the current drawing into its own record - only
+  // meaningful once the design has been saved at least once.
+  function updateSaveAsButton() {
+    $("btn-save-as").hidden = !state.currentDesignId;
+  }
+
+  $("btn-save-as").addEventListener("click", () => {
+    if (!state.currentSpec || !state.currentDesignId) return;
+    openSaveModal(true);
+  });
 
   $("btn-download").addEventListener("click", async () => {
     if (!state.currentSpec) {

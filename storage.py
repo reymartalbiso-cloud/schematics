@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 
@@ -42,15 +43,23 @@ def _local_save(store: dict) -> None:
     _LOCAL_FILE.write_text(json.dumps(store), encoding="utf-8")
 
 
+def _key_segment(key: str) -> str:
+    # Percent-encode the key so a "/" (or other reserved char) in a
+    # client-supplied id can't split into extra Upstash REST path segments,
+    # which the Redis REST protocol would parse as additional command
+    # arguments. safe="" also encodes "/". Keeps the command verb literal.
+    return quote(key, safe="")
+
+
 def kv_get(key: str) -> str | None:
     if _upstash_enabled():
-        return _upstash("GET", f"get/{key}").get("result")
+        return _upstash("GET", f"get/{_key_segment(key)}").get("result")
     return _local_load().get(key)
 
 
 def kv_set(key: str, value: str) -> None:
     if _upstash_enabled():
-        _upstash("POST", f"set/{key}", data=value.encode("utf-8"))
+        _upstash("POST", f"set/{_key_segment(key)}", data=value.encode("utf-8"))
         return
     store = _local_load()
     store[key] = value
@@ -59,7 +68,7 @@ def kv_set(key: str, value: str) -> None:
 
 def kv_delete(key: str) -> None:
     if _upstash_enabled():
-        _upstash("POST", f"del/{key}")
+        _upstash("POST", f"del/{_key_segment(key)}")
         return
     store = _local_load()
     store.pop(key, None)
