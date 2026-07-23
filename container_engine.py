@@ -476,27 +476,90 @@ def draw_plan_view(msp, spec, origin):
 
 
 # ---------------------------------------------------------------------------
+# Elevation shell helpers (shared by front/side/back)
+# ---------------------------------------------------------------------------
+
+CASTING_MM = 180   # ISO corner casting size as seen in elevation
+TEETH_H_MM = 45    # corrugated roof-edge tab height above the top line
+BASE_H_MM = 65     # base/skid band height
+
+
+def _diag_hatch(msp, x0, y0, x1, y1, spacing, layer, linetype=None):
+    """Parallel 45-degree lines properly clipped to a rectangle - used for
+    glass streaks (sparse) and the ground/base band (dense)."""
+    if x1 - x0 <= 0 or y1 - y0 <= 0:
+        return
+    attribs = {"layer": layer}
+    if linetype:
+        attribs["linetype"] = linetype
+    c = (y0 - x1) + spacing  # family of lines y = x + c
+    while c < y1 - x0:
+        ex0 = max(x0, y0 - c)
+        ex1 = min(x1, y1 - c)
+        if ex0 < ex1:
+            msp.add_line((ex0, ex0 + c), (ex1, ex1 + c), dict(attribs))
+        c += spacing
+
+
+def _corner_casting(msp, corner_x, corner_y, dx, dy, layer="OUTLINE"):
+    """ISO corner casting: a square with an elliptical hole, drawn inward
+    from a shell corner. dx/dy are +1/-1 pointing into the shell."""
+    x1 = corner_x + dx * CASTING_MM
+    y1 = corner_y + dy * CASTING_MM
+    _rect(msp, min(corner_x, x1), min(corner_y, y1), max(corner_x, x1), max(corner_y, y1), layer)
+    msp.add_circle(
+        center=((corner_x + x1) / 2.0, (corner_y + y1) / 2.0),
+        radius=CASTING_MM * 0.22,
+        dxfattribs={"layer": layer},
+    )
+
+
+def _elevation_shell(msp, ox, oy, w, h, corrugated=False):
+    """Container elevation shell: outline, four corner castings, the
+    corrugated roof-edge tabs along the top, and optional full-face
+    corrugation (vertical ribbing)."""
+    _rect(msp, ox, oy, ox + w, oy + h, "OUTLINE")
+
+    _corner_casting(msp, ox, oy, 1, 1)
+    _corner_casting(msp, ox + w, oy, -1, 1)
+    _corner_casting(msp, ox, oy + h, 1, -1)
+    _corner_casting(msp, ox + w, oy + h, -1, -1)
+
+    # Roof-edge tabs: small rectangles standing proud of the top line.
+    tab_w, tab_gap = 140, 120
+    x = ox + CASTING_MM + tab_gap
+    while x + tab_w < ox + w - CASTING_MM:
+        _rect(msp, x, oy + h, x + tab_w, oy + h + TEETH_H_MM, "CORRUGATION")
+        x += tab_w + tab_gap
+
+    if corrugated:
+        spacing = 150
+        x = ox + spacing
+        while x < ox + w - spacing / 2.0:
+            msp.add_line((x, oy + CASTING_MM), (x, oy + h - CASTING_MM),
+                         dxfattribs={"layer": "CORRUGATION"})
+            x += spacing
+
+
+def _leader_callout(msp, text, tx, ty, target, layer="CALLOUTS", height=100):
+    """Callout text with a straight leader line to the feature it names,
+    matching the reference convention (no arrowhead, thin line)."""
+    _mtext_simple(msp, text, tx, ty, height, layer)
+    # Leader starts just under the text and runs to the target.
+    start_y = ty - height * 0.8 if target[1] < ty else ty + height * 0.8
+    msp.add_line((tx, start_y), target, dxfattribs={"layer": layer})
+
+
+# ---------------------------------------------------------------------------
 # Front elevation
 # ---------------------------------------------------------------------------
 
-def _hatch_diagonals(msp, x0, y0, x1, y1, layer, count=4):
-    """Draw `count` parallel 45-degree lines across a panel rectangle,
-    the standard drafting convention for glazing in elevation."""
-    width = x1 - x0
-    height = y1 - y0
-    step = width / (count + 1.0)
-    x_start = x0
-    for i in range(1, count + 1):
-        x_start = x0 + step * i
-        x_end = x_start - height
-        if x_end < x0:
-            y_at_x0 = y0 + (x_start - x0)
-            msp.add_line((x0, y_at_x0), (x_start, y0), dxfattribs={"layer": layer})
-        else:
-            msp.add_line((x_end, y1), (x_start, y0), dxfattribs={"layer": layer})
-
-
 def draw_front_elevation(msp, spec, origin):
+    """Front (glass-wall) elevation following the reference sheets: shell
+    with castings and roof tabs, hatched base band, double-framed glazing
+    panels with diagonal glass streaks, slider sub-panels for the door,
+    dashed cable braces, leader callouts, stacked bottom dimension rows,
+    and glass-height + overall vertical dimensions."""
     ox, oy = origin
     container = spec.get("container", {})
     length = container.get("length_mm", 6058)
@@ -504,46 +567,78 @@ def draw_front_elevation(msp, spec, origin):
     front = spec.get("front_elevation", {})
     height = front.get("height_mm", container.get("height_mm", 2896))
 
-    _rect(msp, ox, oy, ox + length, oy + height, "OUTLINE")
+    _elevation_shell(msp, ox, oy, length, height)
 
     panels = front.get("glazing_panels")
-    boundary_xs = [ox]
     if panels:
-        cursor_x = ox
+        total_w = sum(p.get("width_mm", 0) for p in panels)
+        fx0 = ox + max(CASTING_MM, (length - total_w) / 2.0)
+        gz_y0 = oy + BASE_H_MM
+        gz_y1 = oy + height - 100  # top frame margin under the roof line
+
+        # Hatched base band under the glass wall.
+        _rect(msp, fx0, oy, fx0 + total_w, gz_y0, "OUTLINE")
+        _diag_hatch(msp, fx0, oy, fx0 + total_w, gz_y0, 90, "CORRUGATION")
+
+        boundary_xs = [fx0]
+        cursor_x = fx0
+        glass_panels = []
         for panel in panels:
             pw = panel.get("width_mm", 0)
-            x0 = cursor_x
-            x1 = cursor_x + pw
-            _rect(msp, x0, oy, x1, oy + height, "GLAZING")
-
+            x0, x1 = cursor_x, cursor_x + pw
             ptype = panel.get("type", "")
+
+            _rect(msp, x0, gz_y0, x1, gz_y1, "GLAZING")
             if ptype == "sliding_glass":
-                _hatch_diagonals(msp, x0, oy, x1, oy + height, "GLAZING", count=3)
-            elif ptype == "frame":
-                msp.add_line((x0, oy), (x1, oy + height), dxfattribs={"layer": "GLAZING"})
-                msp.add_line((x0, oy + height), (x1, oy), dxfattribs={"layer": "GLAZING"})
+                # Slider: two sub-panels, each with an inner frame + streaks.
+                mid = (x0 + x1) / 2.0
+                for sx0, sx1 in ((x0, mid), (mid, x1)):
+                    _rect(msp, sx0 + 40, gz_y0 + 40, sx1 - 40, gz_y1 - 40, "GLAZING")
+                    _diag_hatch(msp, sx0 + 100, gz_y0 + 100, sx1 - 100, gz_y1 - 100, 780, "GLAZING")
+                glass_panels.append((x0, x1))
+            elif ptype == "fixed_glass":
+                _rect(msp, x0 + 40, gz_y0 + 40, x1 - 40, gz_y1 - 40, "GLAZING")
+                _diag_hatch(msp, x0 + 100, gz_y0 + 100, x1 - 100, gz_y1 - 100, 720, "GLAZING")
+                glass_panels.append((x0, x1))
+            # "frame" panels stay as the bare structural rectangle.
 
             cursor_x = x1
             boundary_xs.append(cursor_x)
 
-        dim_line_y = oy - 250
-        _dim_chain(msp, dim_line_y, oy, boundary_xs, layer="DIMS")
+        # Dashed cable braces across the end glass bays + leader callouts.
+        if front.get("cable_bracing") and glass_panels:
+            for bx0, bx1 in (glass_panels[0], glass_panels[-1]):
+                msp.add_line((bx0, gz_y0), (bx1, gz_y1),
+                             dxfattribs={"layer": "CALLOUTS", "linetype": "DASHED"})
+            lx0, _ = glass_panels[0]
+            _leader_callout(msp, "diagonal cable wire",
+                            ox - 500, oy + height * 0.62,
+                            (lx0 + 260, gz_y0 + (gz_y1 - gz_y0) * 0.55))
 
-    callouts = front.get("frame_callouts")
-    if callouts:
-        text_y = oy + height + 250
-        for callout in callouts:
-            _mtext_simple(msp, callout, ox + length / 2.0, text_y, 110, "CALLOUTS")
-            text_y += 220
+        # Frame callouts with leaders: first to the corner post, the rest
+        # distributed across the mullions.
+        callouts = front.get("frame_callouts") or []
+        mullions = boundary_xs[1:-1] or [fx0]
+        for i, callout in enumerate(callouts):
+            if i == 0:
+                target = (fx0, gz_y1 - 60)
+                tx = fx0 - 300
+            else:
+                m = mullions[min(i - 1, len(mullions) - 1)]
+                target = (m, gz_y1 - 40)
+                tx = m
+            _leader_callout(msp, callout, tx, oy + height + 320 + (i % 2) * 220, target)
 
-    if front.get("cable_bracing"):
-        msp.add_line((ox, oy), (ox + length * 0.5, oy + height),
-                     dxfattribs={"layer": "CALLOUTS"})
-        _mtext_simple(msp, "cable brace", ox + length * 0.25, oy + height * 0.5,
-                      100, "CALLOUTS")
+        # Stacked bottom rows: panel chain, then overall frame span.
+        _dim_chain(msp, oy - 350, oy, boundary_xs, layer="DIMS")
+        _dim(msp, (fx0, oy), (fx0 + total_w, oy), -700, "DIMS")
+
+        # Vertical dims on the right: glass height, then overall height.
+        _dim(msp, (ox + length, gz_y0), (ox + length, gz_y1), -330, "DIMS")
+        _dim(msp, (ox + length, oy), (ox + length, oy + height), -660, "DIMS")
 
     title = front.get("title")
-    _title_below(msp, title, ox + length / 2.0, oy - 700)
+    _title_below(msp, title, ox + length / 2.0, oy - 1150)
 
 
 # ---------------------------------------------------------------------------
@@ -551,12 +646,15 @@ def draw_front_elevation(msp, spec, origin):
 # ---------------------------------------------------------------------------
 
 def draw_side_elevation(msp, spec, origin):
+    """Side (container end) elevation: corrugated shell with castings and
+    roof tabs, the fold-out floor slab deployed to the left with its dashed
+    swing arc, and width/height dimensions - following the reference sheets."""
     ox, oy = origin
     container = spec.get("container", {})
     width = container.get("width_mm", 2438)
     height = container.get("height_mm", 2896)
 
-    _rect(msp, ox, oy, ox + width, oy + height, "OUTLINE")
+    _elevation_shell(msp, ox, oy, width, height, corrugated=True)
 
     side = spec.get("side_elevation", {})
     platform = side.get("fold_out_platform")
@@ -564,27 +662,35 @@ def draw_side_elevation(msp, spec, origin):
         pw = platform.get("width_mm", 0)
         radius = platform.get("swing_radius_mm", pw)
 
-        pivot_x = ox + width
-        pivot_y = oy
+        # Deployed floor slab extending from the container base to the left
+        # (the side the wall folds open onto), with a hatched edge.
+        slab_x0, slab_x1 = ox - pw, ox
+        _rect(msp, slab_x0, oy, slab_x1, oy + BASE_H_MM, "CALLOUTS")
+        _diag_hatch(msp, slab_x0, oy, slab_x1, oy + BASE_H_MM, 90, "CORRUGATION")
 
-        _rect(msp, pivot_x, pivot_y, pivot_x + pw, pivot_y + 60, "CALLOUTS")
-
-        # Arc sweeping from the deployed (horizontal, angle 0) position up to
-        # the stowed (vertical, angle 90) position against the container wall.
+        # Dashed arc sweeping between deployed (horizontal) and stowed
+        # (vertical, against the container wall) positions.
         msp.add_arc(
-            center=(pivot_x, pivot_y),
+            center=(ox, oy + BASE_H_MM),
             radius=radius,
-            start_angle=0,
-            end_angle=90,
-            dxfattribs={"layer": "CALLOUTS"},
+            start_angle=90,
+            end_angle=180,
+            dxfattribs={"layer": "CALLOUTS", "linetype": "DASHED"},
         )
 
+        # Slab depth dimension below, then the label with a leader.
+        _dim(msp, (slab_x0, oy), (slab_x1, oy), -350, "DIMS")
         label = side.get("floor_extension_label")
         if label:
-            _mtext_simple(msp, label, pivot_x + pw / 2.0, pivot_y - 150, 100, "CALLOUTS")
+            _leader_callout(msp, label, slab_x0 + pw * 0.35, oy - 800,
+                            (slab_x0 + pw * 0.5, oy - 20))
+
+    # Overall width below, overall height on the right.
+    _dim(msp, (ox, oy), (ox + width, oy), -700, "DIMS")
+    _dim(msp, (ox + width, oy), (ox + width, oy + height), -330, "DIMS")
 
     title = side.get("title")
-    _title_below(msp, title, ox + width / 2.0, oy - 700)
+    _title_below(msp, title, ox + width / 2.0, oy - 1150)
 
 
 # ---------------------------------------------------------------------------
@@ -592,39 +698,65 @@ def draw_side_elevation(msp, spec, origin):
 # ---------------------------------------------------------------------------
 
 def draw_back_elevation(msp, spec, origin):
+    """Back elevation: fully corrugated shell (the reference's long wall is
+    the corrugated one - drawn at container length, not width), with the
+    vent window cut out of the ribbing and dimensioned the way the
+    references do: width above, sill height below, position chain and
+    overall length at the bottom, overall height on the left."""
     ox, oy = origin
     container = spec.get("container", {})
-    width = container.get("width_mm", 2438)
+    length = container.get("length_mm", 6058)
     height = container.get("height_mm", 2896)
-
-    _rect(msp, ox, oy, ox + width, oy + height, "OUTLINE")
-
-    spacing = 200
-    x = ox + spacing
-    while x < ox + width:
-        msp.add_line((x, oy), (x, oy + height), dxfattribs={"layer": "CORRUGATION"})
-        x += spacing
 
     back = spec.get("back_elevation", {})
     vent = back.get("vent_window")
+
+    vent_bounds = None
     if vent:
         vw = vent.get("width_mm", 0)
         vh = vent.get("height_mm", 0)
-        pos_from_left = vent.get("position_from_left_mm", 0)
-        center_h = vent.get("center_height_mm", height / 2.0)
-
-        x0 = ox + pos_from_left
+        x0 = ox + vent.get("position_from_left_mm", 0)
         x1 = x0 + vw
+        center_h = vent.get("center_height_mm", height / 2.0)
         y0 = oy + center_h - vh / 2.0
         y1 = oy + center_h + vh / 2.0
+        vent_bounds = (x0, y0, x1, y1)
 
+    _elevation_shell(msp, ox, oy, length, height, corrugated=False)
+
+    # Corrugation ribbing, interrupted across the vent window.
+    spacing = 150
+    x = ox + spacing
+    while x < ox + length - spacing / 2.0:
+        if vent_bounds and vent_bounds[0] <= x <= vent_bounds[2]:
+            msp.add_line((x, oy + CASTING_MM), (x, vent_bounds[1]),
+                         dxfattribs={"layer": "CORRUGATION"})
+            msp.add_line((x, vent_bounds[3]), (x, oy + height - CASTING_MM),
+                         dxfattribs={"layer": "CORRUGATION"})
+        else:
+            msp.add_line((x, oy + CASTING_MM), (x, oy + height - CASTING_MM),
+                         dxfattribs={"layer": "CORRUGATION"})
+        x += spacing
+
+    if vent_bounds:
+        x0, y0, x1, y1 = vent_bounds
+        # Window with an inner frame.
         _rect(msp, x0, y0, x1, y1, "OUTLINE")
+        _rect(msp, x0 + 40, y0 + 40, x1 - 40, y1 - 40, "GLAZING")
+        # Width dim above the window, sill height below it.
+        _dim(msp, (x0, y1), (x1, y1), 200, "DIMS")
+        _dim(msp, ((x0 + x1) / 2.0, oy), ((x0 + x1) / 2.0, y0), (x0 + x1) / 2.0 - (x1 + 300), "DIMS")
+        # Bottom rows: position chain, then overall length.
+        _dim_chain(msp, oy - 350, oy, [ox, x0, x1, ox + length], layer="DIMS")
+        _dim(msp, (ox, oy), (ox + length, oy), -700, "DIMS")
+    else:
+        _dim(msp, (ox, oy), (ox + length, oy), -350, "DIMS")
 
-        dim_line_y = y1 + 250
-        _dim_chain(msp, dim_line_y, y1, [x0, x1], layer="DIMS")
+    # Overall height on the left.
+    _dim_chain_vertical(msp, ox - 330, ox, [oy, oy + height], layer="DIMS")
 
     title = back.get("title")
-    _title_below(msp, title, ox + width / 2.0, oy - 700)
+    _title_below(msp, title, ox + length / 2.0, oy - 1150)
 
 
 # ---------------------------------------------------------------------------
@@ -675,16 +807,21 @@ def build_doc(spec: dict, views: list | None = None):
     length = container.get("length_mm", 6058)
     height = container.get("height_mm", 2896)
 
-    # BELOW_MARGIN_MM is a conservative allowance for the title text and any
-    # dimension chains a view draws below its own base rectangle, so the next
-    # row's origin can be computed without the two rows' geometry colliding.
-    BELOW_MARGIN_MM = 1000
+    # BELOW_MARGIN_MM is a conservative allowance for the stacked dimension
+    # rows and underlined title a view draws below its own base rectangle,
+    # so the next row's origin can be computed without geometry colliding.
+    # The plan view additionally hangs its fold-out deck below the container.
+    BELOW_MARGIN_MM = 1600
 
     cursor_y = 0
 
     if "plan" in requested:
         draw_plan_view(msp, spec, (0, cursor_y))
-        cursor_y = cursor_y - BELOW_MARGIN_MM - ROW_GAP_MM
+        plan = spec.get("plan", {})
+        deck_drop = 0
+        if plan.get("deck") and plan.get("sliding_door"):
+            deck_drop = plan["deck"].get("depth_mm", 2262) + 60
+        cursor_y = cursor_y - deck_drop - BELOW_MARGIN_MM - ROW_GAP_MM
 
     if "front" in requested or "side" in requested:
         front = spec.get("front_elevation", {})
@@ -694,7 +831,11 @@ def build_doc(spec: dict, views: list | None = None):
         if "front" in requested:
             draw_front_elevation(msp, spec, (0, front_origin_y))
         if "side" in requested:
-            side_x = length + COL_GAP_MM
+            # Leave room for the fold-out floor slab the side view deploys
+            # to its left, plus the front view's right-hand vertical dims.
+            side = spec.get("side_elevation", {})
+            platform = side.get("fold_out_platform") or {}
+            side_x = length + COL_GAP_MM + platform.get("width_mm", 0) + 500
             draw_side_elevation(msp, spec, (side_x, front_origin_y))
 
         cursor_y = front_origin_y - BELOW_MARGIN_MM - ROW_GAP_MM
