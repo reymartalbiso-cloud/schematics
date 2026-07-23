@@ -15,6 +15,7 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 from ezdxf.addons.drawing import RenderContext, Frontend
 from ezdxf.addons.drawing.config import BackgroundPolicy, Configuration
 from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+from ezdxf.fonts import fonts as ezdxf_fonts
 
 import matplotlib
 matplotlib.use("Agg")
@@ -24,6 +25,40 @@ import matplotlib.pyplot as plt
 # system-font discovery, which differs between local machines and the
 # serverless environment.
 plt.rcParams["font.family"] = "DejaVu Sans"
+
+# ezdxf has its OWN font discovery, entirely separate from matplotlib's: it
+# scans platform font directories (/usr/share/fonts etc. on Linux) to build
+# a font cache, and the drawing addon renders text as vector paths using
+# those fonts. On serverless Linux (Vercel) there are no system fonts at
+# all, so the cache comes up empty and ezdxf falls back to a placeholder
+# font that renders every glyph as an empty "tofu" rectangle - geometry
+# fine, all text as boxes. Matplotlib ships DejaVu TTFs inside its own pip
+# package, which is guaranteed present here, so register that directory
+# with ezdxf's font manager. Runs once at import; harmless when system
+# fonts also exist.
+_MPL_FONT_DIR = os.path.join(os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf")
+
+
+def _register_bundled_fonts() -> None:
+    try:
+        fm = ezdxf_fonts.font_manager
+        # clear() first: besides dropping any (possibly empty) system scan,
+        # it resets the memoized fallback-font name, which - once computed
+        # against an empty cache - stays poisoned even after fonts appear.
+        fm.clear()
+        # The match cache holds negative ("no font found") results that
+        # clear()/build() never invalidate; drop it so queries made before
+        # registration can't pin rendering to the tofu fallback.
+        if hasattr(fm, "_match_cache"):
+            fm._match_cache.clear()
+        fm.build([_MPL_FONT_DIR], support_dirs=False)
+    except Exception:
+        # A failed scan must never take down rendering; worst case is the
+        # pre-existing behavior (tofu boxes on fontless systems).
+        pass
+
+
+_register_bundled_fonts()
 
 
 # ---------------------------------------------------------------------------
