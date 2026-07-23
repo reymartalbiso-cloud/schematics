@@ -473,6 +473,274 @@ def _draw_bathroom(msp, bathroom, ix0, ix1, y_front, y_back, wall_t=60):
 
 
 # ---------------------------------------------------------------------------
+# Furniture symbols (FURNITURE layer) - plan-view fixtures for general rooms
+# ---------------------------------------------------------------------------
+
+def _draw_bed(msp, x0, y0, x1, y1, size, layer):
+    """Bed against the back (top) wall: mattress + pillow(s) at the head +
+    a diagonal duvet-fold line, matching the reference 1200*2000 bed."""
+    double = str(size).lower() != "single"
+    bw = min(1500 if double else 1000, x1 - x0 - 200)
+    bl = min(2000, y1 - y0 - 150)
+    cx = (x0 + x1) / 2.0
+    mx0, mx1 = cx - bw / 2.0, cx + bw / 2.0
+    my1 = y1 - 80            # head against the back wall
+    my0 = my1 - bl
+    _rect(msp, mx0, my0, mx1, my1, layer)
+    # Pillows at the head.
+    pillow_d = bl * 0.16
+    if double:
+        pw = (bw - 3 * 60) / 2.0
+        _rounded_rect(msp, mx0 + 60, my1 - pillow_d - 40, mx0 + 60 + pw, my1 - 40, 40, layer)
+        _rounded_rect(msp, mx1 - 60 - pw, my1 - pillow_d - 40, mx1 - 60, my1 - 40, 40, layer)
+    else:
+        _rounded_rect(msp, mx0 + 60, my1 - pillow_d - 40, mx1 - 60, my1 - 40, 40, layer)
+    # Duvet fold line across the foot third.
+    fold_y = my0 + bl * 0.34
+    msp.add_line((mx0, fold_y), (mx1, fold_y), dxfattribs={"layer": layer})
+
+
+def _draw_sofa(msp, x0, y0, x1, y1, layer):
+    """Sofa against the back wall, facing the front of the room."""
+    sw = min(1900, x1 - x0 - 200)
+    sd = min(850, (y1 - y0) * 0.4)
+    cx = (x0 + x1) / 2.0
+    sx0, sx1 = cx - sw / 2.0, cx + sw / 2.0
+    sy1 = y1 - 100
+    sy0 = sy1 - sd
+    _rect(msp, sx0, sy0, sx1, sy1, layer)          # seat block
+    back = sd * 0.22
+    msp.add_line((sx0, sy1 - back), (sx1, sy1 - back), dxfattribs={"layer": layer})  # backrest
+    arm = sw * 0.08
+    msp.add_line((sx0 + arm, sy0), (sx0 + arm, sy1 - back), dxfattribs={"layer": layer})
+    msp.add_line((sx1 - arm, sy0), (sx1 - arm, sy1 - back), dxfattribs={"layer": layer})
+
+
+def _draw_desk(msp, x0, y0, x1, y1, layer):
+    """Desk against the back wall with a chair in front."""
+    dw = min(1400, x1 - x0 - 200)
+    dd = 600
+    cx = (x0 + x1) / 2.0
+    dx0, dx1 = cx - dw / 2.0, cx + dw / 2.0
+    dy1 = y1 - 80
+    dy0 = dy1 - dd
+    _rect(msp, dx0, dy0, dx1, dy1, layer)
+    # Chair: a rounded seat in front of the desk.
+    _rounded_rect(msp, cx - 250, dy0 - 520, cx + 250, dy0 - 100, 80, layer)
+
+
+def _draw_dining(msp, x0, y0, x1, y1, layer):
+    """Dining table centered in the room with four chairs."""
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    tw = min(1400, (x1 - x0) * 0.5)
+    td = min(800, (y1 - y0) * 0.4)
+    _rounded_rect(msp, cx - tw / 2.0, cy - td / 2.0, cx + tw / 2.0, cy + td / 2.0, 80, layer)
+    cs = 360
+    for dx in (-tw * 0.28, tw * 0.28):
+        _rounded_rect(msp, cx + dx - cs / 2.0, cy + td / 2.0 + 90, cx + dx + cs / 2.0, cy + td / 2.0 + 90 + cs, 60, layer)
+        _rounded_rect(msp, cx + dx - cs / 2.0, cy - td / 2.0 - 90 - cs, cx + dx + cs / 2.0, cy - td / 2.0 - 90, 60, layer)
+
+
+def _draw_stairs(msp, x0, y0, x1, y1, layer):
+    """Stair run: parallel treads across the room with a direction arrow,
+    the plan symbol for vertical circulation in a stacked/modular home."""
+    margin = 120
+    sx0, sy0, sx1, sy1 = x0 + margin, y0 + margin, x1 - margin, y1 - margin
+    _rect(msp, sx0, sy0, sx1, sy1, layer)
+    n = max(4, int((sx1 - sx0) / 300))
+    for i in range(1, n):
+        tx = sx0 + (sx1 - sx0) * i / n
+        msp.add_line((tx, sy0), (tx, sy1), dxfattribs={"layer": layer})
+    # Up-arrow along the run centreline.
+    cy = (sy0 + sy1) / 2.0
+    msp.add_line((sx0 + 100, cy), (sx1 - 100, cy), dxfattribs={"layer": layer})
+    msp.add_line((sx1 - 100, cy), (sx1 - 260, cy + 90), dxfattribs={"layer": layer})
+    msp.add_line((sx1 - 100, cy), (sx1 - 260, cy - 90), dxfattribs={"layer": layer})
+
+
+def _draw_wardrobe(msp, x0, y0, x1, y1, layer):
+    """Shallow wardrobe against the back wall with hinged-door tick marks."""
+    ww = min(1200, x1 - x0 - 200)
+    wd = 550
+    cx = (x0 + x1) / 2.0
+    wx0, wx1 = cx - ww / 2.0, cx + ww / 2.0
+    wy1 = y1 - 80
+    wy0 = wy1 - wd
+    _rect(msp, wx0, wy0, wx1, wy1, layer)
+    # Two door-swing ticks indicating the wardrobe opens toward the room.
+    msp.add_line((wx0 + ww * 0.25, wy0), (wx0 + ww * 0.25, wy0 - 120), dxfattribs={"layer": layer})
+    msp.add_line((wx0 + ww * 0.75, wy0), (wx0 + ww * 0.75, wy0 - 120), dxfattribs={"layer": layer})
+
+
+# ---------------------------------------------------------------------------
+# General interior rooms: partition a container into a left-to-right series
+# of typed rooms (bedroom / bathroom / kitchen / living / office / dining /
+# storage / empty), each with a partition wall, a door, and furniture. This
+# generalizes the single-bathroom + kitchen-run layout so the engine can draw
+# the multi-room homes shown in the reference packages (e.g. bathroom |
+# bedroom | kitchen | bedroom | bathroom).
+# ---------------------------------------------------------------------------
+
+_ROOM_ALIASES = {
+    "bed": "bedroom", "master": "bedroom", "bedroom": "bedroom",
+    "bath": "bathroom", "bathroom": "bathroom", "wc": "bathroom", "toilet": "bathroom", "ensuite": "bathroom",
+    "kitchen": "kitchen", "kitchenette": "kitchen", "galley": "kitchen",
+    "living": "living", "lounge": "living", "sitting": "living", "family": "living",
+    "office": "office", "study": "office", "work": "office",
+    "dining": "dining", "diner": "dining",
+    "storage": "storage", "closet": "storage", "utility": "storage", "wardrobe": "storage",
+    "stair": "stair", "stairs": "stair", "stairwell": "stair", "staircase": "stair",
+}
+
+_ROOM_TYPES = ("bedroom", "bathroom", "kitchen", "living", "office", "dining", "storage", "stair", "empty")
+
+
+def _room_type(room):
+    explicit = str(room.get("type", "")).lower()
+    if explicit in _ROOM_TYPES:
+        return explicit
+    hay = f"{room.get('type','')} {room.get('name','')}".lower()
+    for key, canon in _ROOM_ALIASES.items():
+        if key in hay:
+            return canon
+    return "empty"
+
+
+def _partition(msp, xc, pt, y_front, y_back, door_from_front=200):
+    """Insulated double-line partition wall of thickness `pt` centred on xc,
+    spanning front..back, with a swing-door opening near the front. Returns
+    the two face x-positions for the dimension chain."""
+    px0, px1 = xc - pt / 2.0, xc + pt / 2.0
+    door_w = max(650, min(800, (y_back - y_front) * 0.32))
+    gap0 = y_front + door_from_front
+    gap1 = min(y_back - 100, gap0 + door_w)
+    for x in (px0, px1):
+        msp.add_line((x, y_front), (x, gap0), dxfattribs={"layer": "OUTLINE"})
+        msp.add_line((x, gap1), (x, y_back), dxfattribs={"layer": "OUTLINE"})
+    msp.add_line((px0, gap0), (px1, gap0), dxfattribs={"layer": "OUTLINE"})
+    msp.add_line((px0, gap1), (px1, gap1), dxfattribs={"layer": "OUTLINE"})
+    _insulation_fill(msp, px0, y_front, px1, gap0)
+    _insulation_fill(msp, px0, gap1, px1, y_back)
+    # Door leaf + 90-degree swing into the room to the right of the partition.
+    hinge = (px1, gap0)
+    leaf = gap1 - gap0
+    msp.add_line(hinge, (px1 + leaf, gap0), dxfattribs={"layer": "DOOR"})
+    msp.add_arc(center=hinge, radius=leaf, start_angle=0, end_angle=90,
+                dxfattribs={"layer": "DOOR"})
+    return px0, px1
+
+
+def _draw_room_contents(msp, room, rx0, iy0, rx1, iy1):
+    """Draw furniture + label for one room given its interior bounds."""
+    rtype = _room_type(room)
+    name = room.get("name") or rtype.title()
+    cx = (rx0 + rx1) / 2.0
+
+    if rtype == "bedroom":
+        _draw_bed(msp, rx0, iy0, rx1, iy1, room.get("bed", "double"), "FURNITURE")
+        if (rx1 - rx0) > 2600:
+            _draw_wardrobe(msp, rx0 + 120, iy0, rx0 + 120 + 900, iy1, "FURNITURE")
+    elif rtype == "living":
+        _draw_sofa(msp, rx0, iy0, rx1, iy1, "FURNITURE")
+    elif rtype == "office":
+        _draw_desk(msp, rx0, iy0, rx1, iy1, "FURNITURE")
+    elif rtype == "dining":
+        _draw_dining(msp, rx0, iy0, rx1, iy1, "FURNITURE")
+    elif rtype == "storage":
+        _draw_wardrobe(msp, rx0, iy0, rx1, iy1, "FURNITURE")
+    elif rtype == "stair":
+        _draw_stairs(msp, rx0, iy0, rx1, iy1, "STAIR")
+    elif rtype == "kitchen":
+        _draw_inline_kitchen(msp, room, rx0, iy0, rx1, iy1)
+    elif rtype == "bathroom":
+        _draw_inline_bathroom(msp, room, rx0, iy0, rx1, iy1)
+    # 'empty' rooms carry only a label.
+
+    label_y = iy0 + 200 if rtype in ("bedroom", "living", "office", "dining", "storage", "stair", "empty") else iy0 + 120
+    _mtext_simple(msp, name, cx, label_y, 110, "TEXT")
+
+
+def _draw_inline_kitchen(msp, room, rx0, iy0, rx1, iy1):
+    """A kitchen counter run along the back wall within the room bounds.
+    Uses the room's own segments if given, else a sensible default run."""
+    depth = room.get("depth_mm", 600)
+    band_y1 = iy1
+    band_y0 = band_y1 - depth
+    segments = room.get("segments")
+    if not segments:
+        segments = [{"label": "Stove"}, {"label": "Counter"}, {"label": "Sink"}, {"label": "Fridge"}]
+    n = len(segments)
+    run_w = rx1 - rx0 - 100
+    seg_w = run_w / n
+    cursor = rx0 + 50
+    for seg in segments:
+        w = seg.get("width_mm", seg_w)
+        sx0, sx1 = cursor, cursor + w
+        msp.add_line((sx1, band_y0), (sx1, band_y1), dxfattribs={"layer": "KITCHEN"})
+        kind = _classify_fixture(seg.get("label", ""))
+        if kind == "stove":
+            _draw_stove_symbol(msp, sx0, band_y0, sx1, band_y1, "KITCHEN")
+        elif kind == "sink":
+            _draw_sink_symbol(msp, sx0, band_y0, sx1, band_y1, "KITCHEN")
+        elif kind == "fridge":
+            _draw_fridge_symbol(msp, sx0, band_y0, sx1, band_y1, "KITCHEN", "TEXT")
+        cursor = sx1
+    msp.add_line((rx0 + 50, band_y0), (cursor, band_y0), dxfattribs={"layer": "KITCHEN"})
+
+
+def _draw_inline_bathroom(msp, room, rx0, iy0, rx1, iy1):
+    """Bathroom fixtures within an already-partitioned room (partition walls
+    are drawn by the room loop, so this places only the fixtures)."""
+    fixtures = [str(f).lower() for f in (room.get("fixtures") or ["toilet", "shower", "basin"])]
+    w = rx1 - rx0
+    s = max(500, min(850, w * 0.5, (iy1 - iy0) * 0.42))
+    if "shower" in fixtures:
+        _draw_shower(msp, rx0 + 60, iy1 - s, rx0 + 60 + s, iy1, "KITCHEN")
+    if "basin" in fixtures:
+        bw = min(460, w - 200)
+        if bw > 0:
+            _draw_basin(msp, rx0 + 60, iy0 + 160, rx0 + 60 + bw, iy0 + 160 + 360, "KITCHEN")
+    if "toilet" in fixtures:
+        if w >= 900:
+            _draw_toilet_side(msp, rx1 - 40, (iy0 + iy1) / 2.0, -1, "KITCHEN")
+        else:
+            _draw_toilet(msp, (rx0 + s + rx1) / 2.0 if "shower" in fixtures else (rx0 + rx1) / 2.0, iy1, "KITCHEN")
+
+
+def _draw_room_layout(msp, rooms, ix0, iy0, ix1, iy1, pt=60):
+    """Lay rooms left-to-right across the interior, drawing partition walls
+    (thickness `pt`) between them and furniture within. Absolute widths are
+    honored; the last room absorbs any remainder so the rooms always fill the
+    container and the drawn geometry matches the dimensions. Returns the list
+    of partition face x-positions for the bottom dimension chain."""
+    interior = ix1 - ix0
+    widths = [max(0.0, r.get("width_mm", 0)) for r in rooms]
+    total = sum(widths)
+    if total > interior and total > 0:
+        widths = [w * interior / total for w in widths]   # scale down to fit
+    boundaries = [ix0]
+    cursor = ix0
+    for i in range(len(rooms)):
+        if i == len(rooms) - 1:
+            cursor = ix1                       # last room fills to the end wall
+        else:
+            cursor = min(ix1, cursor + widths[i])
+        boundaries.append(cursor)
+
+    partition_faces = []
+    for i, room in enumerate(rooms):
+        b0, b1 = boundaries[i], boundaries[i + 1]
+        # Content bounds are inset by half a partition on any interior side.
+        cx0 = b0 + (pt / 2.0 if i > 0 else 0)
+        cx1 = b1 - (pt / 2.0 if i < len(rooms) - 1 else 0)
+        if i < len(rooms) - 1:
+            f0, f1 = _partition(msp, b1, pt, iy0, iy1)
+            partition_faces.extend([f0, f1])
+        _draw_room_contents(msp, room, cx0, iy0, cx1, iy1)
+    return partition_faces
+
+
+# ---------------------------------------------------------------------------
 # Plan view
 # ---------------------------------------------------------------------------
 
@@ -489,9 +757,11 @@ def draw_plan_view(msp, spec, origin):
     thickness = container.get("wall_thickness_mm", DEFAULT_WALL_THICKNESS_MM)
 
     plan = spec.get("plan", {})
+    rooms = plan.get("rooms") or []
     kitchen_run = plan.get("kitchen_run")
     windows = plan.get("windows") or []
     deck = plan.get("deck")
+    balcony = plan.get("balcony")
     bathroom = plan.get("bathroom")
 
     # One or several sliding doors: plan.sliding_door (single) and
@@ -535,11 +805,18 @@ def draw_plan_view(msp, spec, origin):
         callout = f"W:{round(win.get('width_mm', 0))}*{round(win.get('height_mm', 0))}mm"
         _mtext_simple(msp, callout, (w_x0 + w_x1) / 2.0, oy + width + 400, 110, "TEXT")
 
-    # --- Bathroom at one end (partition + swing door + fixture symbols) ---
     partition_faces = ()
+
+    # --- General multi-room interior (bedroom/bath/kitchen/living/...) ---
+    # When plan.rooms is given, it fully describes the partitioned interior
+    # and supersedes the legacy single-bathroom + kitchen-run path below.
+    if rooms:
+        partition_faces = _draw_room_layout(msp, rooms, ix0, iy0, ix1, iy1, thickness)
+
+    # --- Bathroom at one end (partition + swing door + fixture symbols) ---
     kitchen_x0 = ix0
     kitchen_x1 = ix1
-    if bathroom:
+    if not rooms and bathroom:
         y_front = oy if doors else iy0
         partition_faces = _draw_bathroom(msp, bathroom, ix0, ix1, y_front, iy1, thickness)
         # Keep the kitchen run out of the bathroom's floor area.
@@ -549,7 +826,7 @@ def draw_plan_view(msp, spec, origin):
             kitchen_x1 = ix1 - bathroom.get("width_mm", 1200) - thickness
 
     # --- Kitchen run along the back (top) wall ---
-    if kitchen_run:
+    if not rooms and kitchen_run:
         depth = kitchen_run.get("depth_mm", 700)
         segments = kitchen_run.get("segments", [])
         if segments:
@@ -649,6 +926,27 @@ def draw_plan_view(msp, spec, origin):
         # to the right of the deck edge; see _dim_chain_vertical on signs).
         _dim(msp, (ix1, deck_y0), (ix1, deck_y1), -350, "DIMS")
 
+    # --- Railed balcony below the front wall (alternative to the deck) ---
+    if balcony and not deck:
+        bdepth = balcony.get("depth_mm", 1200)
+        by1 = oy
+        by0 = by1 - bdepth
+        deck_bottom_y = by0
+        _rect(msp, ix0, by0, ix1, by1, "DECK")
+        # Railing line just inside the three open edges + baluster ticks,
+        # the plan convention for a guarded balcony/terrace.
+        inset = 90
+        msp.add_line((ix0 + inset, by0 + inset), (ix1 - inset, by0 + inset), dxfattribs={"layer": "DECK"})
+        msp.add_line((ix0 + inset, by0 + inset), (ix0 + inset, by1), dxfattribs={"layer": "DECK"})
+        msp.add_line((ix1 - inset, by0 + inset), (ix1 - inset, by1), dxfattribs={"layer": "DECK"})
+        step = 300
+        x = ix0 + inset
+        while x <= ix1 - inset:
+            msp.add_line((x, by0), (x, by0 + inset), dxfattribs={"layer": "DECK"})
+            x += step
+        _mtext_simple(msp, balcony.get("label", "Balcony"), (ix0 + ix1) / 2.0, by0 + bdepth * 0.5, 120, "TEXT")
+        _dim(msp, (ix1, by0), (ix1, by1), -350, "DIMS")
+
     # --- Door callouts, centered in the deck / just inside the room ---
     for d_x0, d_x1, d in doors:
         d_h = d.get("height_mm", 2250)
@@ -656,7 +954,7 @@ def draw_plan_view(msp, spec, origin):
         # With a deck the callout sits inside it (reference convention).
         # Without one it goes inside the room above the door - below the
         # wall it would land exactly on the joint-chain text row.
-        callout_y = deck_bottom_y + 170 if deck else iy0 + 200
+        callout_y = deck_bottom_y + 170 if (deck or balcony) else iy0 + 200
         _mtext_simple(msp, callout, (d_x0 + d_x1) / 2.0, callout_y, 130, "TEXT")
 
     # --- Bottom breakdown chain, anchored exterior-to-exterior ---
@@ -966,6 +1264,56 @@ def draw_back_elevation(msp, spec, origin):
 
 
 # ---------------------------------------------------------------------------
+# Stacked / modular elevation (multi-storey containers)
+# ---------------------------------------------------------------------------
+
+def draw_stacked_elevation(msp, spec, levels, origin, kind="front"):
+    """One container shell per level, stacked vertically - the elevation of a
+    modular multi-storey home. `kind`: 'front' shows each storey's glazing
+    (derived from that level's plan) over a corrugation-free shell; 'side'
+    (container width) and 'back' (container length) show plain corrugated
+    stacked shells. Overall height spans all storeys."""
+    ox, oy = origin
+    container = spec.get("container", {})
+    length = container.get("length_mm", 6058)
+    width = container.get("width_mm", 2438)
+    height = container.get("height_mm", 2896)
+    n = len(levels)
+    span = width if kind == "side" else length
+
+    for i, lvl in enumerate(levels):
+        # levels[0] is the ground floor -> physically the BOTTOM of the stack;
+        # each later level sits one storey higher.
+        sy = oy + i * height
+        _elevation_shell(msp, ox, sy, span, height, corrugated=(kind != "front"))
+        _mtext_simple(msp, lvl.get("title", f"Level {i + 1}"), ox - 720, sy + height / 2.0, 110, "TEXT")
+
+        if kind == "front":
+            fe = _derive_elevation_sections({"container": container, "plan": lvl.get("plan", {})})
+            panels = fe.get("front_elevation", {}).get("glazing_panels")
+            if panels:
+                total_w = sum(p.get("width_mm", 0) for p in panels)
+                fx0 = ox + max(CASTING_MM, (span - total_w) / 2.0)
+                gz0, gz1 = sy + BASE_H_MM, sy + height - 100
+                _rect(msp, fx0, sy, fx0 + total_w, gz0, "OUTLINE")
+                _diag_hatch(msp, fx0, sy, fx0 + total_w, gz0, 90, "CORRUGATION")
+                cx = fx0
+                for p in panels:
+                    x0, x1 = cx, cx + p.get("width_mm", 0)
+                    _rect(msp, x0, gz0, x1, gz1, "GLAZING")
+                    if p.get("type") in ("sliding_glass", "fixed_glass"):
+                        _rect(msp, x0 + 40, gz0 + 40, x1 - 40, gz1 - 40, "GLAZING")
+                        _diag_hatch(msp, x0 + 100, gz0 + 100, x1 - 100, gz1 - 100, 740, "GLAZING")
+                    cx = x1
+
+    # Overall dims: total stack height on the right, span below.
+    _dim(msp, (ox + span, oy), (ox + span, oy + n * height), -330, "DIMS")
+    _dim(msp, (ox, oy), (ox + span, oy), -350, "DIMS")
+    kind_label = {"front": "Front", "side": "Side", "back": "Back"}[kind]
+    _title_below(msp, f"Stacked {kind_label} Elevation", ox + span / 2.0, oy - 900)
+
+
+# ---------------------------------------------------------------------------
 # Top-level builder
 # ---------------------------------------------------------------------------
 
@@ -985,6 +1333,8 @@ def _add_layers(doc):
         ("INSULATION", 13),
         ("DOOR", 25),
         ("DECK", 35),
+        ("FURNITURE", 18),
+        ("STAIR", 25),
     ]
     for name, lineweight in layer_defs:
         if name not in doc.layers:
@@ -1071,11 +1421,13 @@ def build_doc(spec: dict, views: list | None = None):
     _add_layers(doc)
 
     requested = set(views) if views else set(DEFAULT_VIEWS)
-    if requested - {"plan"}:
+    levels = spec.get("levels") or []
+    if requested - {"plan"} and not levels:
         spec = _derive_elevation_sections(spec)
 
     container = spec.get("container", {})
     length = container.get("length_mm", 6058)
+    width = container.get("width_mm", 2438)
     height = container.get("height_mm", 2896)
 
     # BELOW_MARGIN_MM is a conservative allowance for the stacked dimension
@@ -1084,16 +1436,46 @@ def build_doc(spec: dict, views: list | None = None):
     # The plan view additionally hangs its fold-out deck below the container.
     BELOW_MARGIN_MM = 1600
 
+    def _plan_downward_drop(plan):
+        drop = BELOW_MARGIN_MM
+        has_door = bool(plan.get("sliding_door") or plan.get("sliding_doors"))
+        if plan.get("deck") and has_door:
+            drop += plan["deck"].get("depth_mm", 2262) + 60
+        elif plan.get("balcony"):
+            drop += plan["balcony"].get("depth_mm", 1200) + 60
+        return drop
+
     cursor_y = 0
 
     if "plan" in requested:
-        draw_plan_view(msp, spec, (0, cursor_y))
-        plan = spec.get("plan", {})
-        has_door = bool(plan.get("sliding_door") or plan.get("sliding_doors"))
-        deck_drop = 0
-        if plan.get("deck") and has_door:
-            deck_drop = plan["deck"].get("depth_mm", 2262) + 60
-        cursor_y = cursor_y - deck_drop - BELOW_MARGIN_MM - ROW_GAP_MM
+        if levels:
+            # Stacked/modular home: one full plan per storey, level[0] on top.
+            for i, lvl in enumerate(levels):
+                lplan = dict(lvl.get("plan", {}))
+                lplan.setdefault("title", lvl.get("title", f"Level {i + 1} Plan"))
+                draw_plan_view(msp, {"container": container, "plan": lplan}, (0, cursor_y))
+                # Drop past this plan's downward extent, then leave the next
+                # plan's upward extent (container width + top dim/callout band).
+                cursor_y -= _plan_downward_drop(lplan) + ROW_GAP_MM + width + 900
+        else:
+            draw_plan_view(msp, spec, (0, cursor_y))
+            cursor_y -= _plan_downward_drop(spec.get("plan", {})) + ROW_GAP_MM
+
+    if levels:
+        # Stacked elevations (each storey shown), placed below the plans.
+        n = len(levels)
+        if "front" in requested or "side" in requested:
+            top = cursor_y - 200
+            front_origin_y = top - n * height
+            if "front" in requested:
+                draw_stacked_elevation(msp, spec, levels, (0, front_origin_y), "front")
+            if "side" in requested:
+                draw_stacked_elevation(msp, spec, levels, (length + COL_GAP_MM + 800, front_origin_y), "side")
+            cursor_y = front_origin_y - BELOW_MARGIN_MM - ROW_GAP_MM
+        if "back" in requested:
+            back_origin_y = cursor_y - n * height
+            draw_stacked_elevation(msp, spec, levels, (0, back_origin_y), "back")
+        return doc
 
     if "front" in requested or "side" in requested:
         front = spec.get("front_elevation", {})

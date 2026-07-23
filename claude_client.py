@@ -76,6 +76,146 @@ FLOORPLAN_SCHEMA = {
     "required": ["walls"],
 }
 
+_ROOM_SCHEMA = {
+    "type": "object",
+    "description": (
+        "One interior room in a left-to-right series that fills the container. "
+        "Rooms are separated by partition walls with doors and drawn with "
+        "furniture symbols for their type."
+    ),
+    "properties": {
+        "name": {"type": "string", "description": "Room label, e.g. 'Master Bedroom', 'Living Room'."},
+        "type": {
+            "type": "string",
+            "enum": ["bedroom", "bathroom", "kitchen", "living", "office", "dining", "storage", "stair", "empty"],
+        },
+        "width_mm": {"type": "number", "description": "Room width along the container length."},
+        "bed": {"type": "string", "enum": ["single", "double"], "description": "For bedrooms."},
+        "fixtures": {
+            "type": "array",
+            "description": "For bathrooms: any of toilet, shower, basin.",
+            "items": {"type": "string", "enum": ["toilet", "shower", "basin"]},
+        },
+    },
+    "required": ["type", "width_mm"],
+}
+
+_PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "rooms": {
+            "type": "array",
+            "description": (
+                "GENERAL multi-room interior: a left-to-right series of typed rooms "
+                "(bedroom, bathroom, kitchen, living, office, dining, storage, stair) "
+                "that partition the container. Use this for anything with bedrooms or "
+                "multiple rooms - it is the correct way to model a real container home "
+                "(e.g. bathroom | bedroom | kitchen | bedroom | bathroom). Widths should "
+                "roughly sum to the container's interior length."
+            ),
+            "items": _ROOM_SCHEMA,
+        },
+        "balcony": {
+            "type": "object",
+            "description": "A railed balcony/terrace in front of the container (alternative to a fold-out deck).",
+            "properties": {"depth_mm": {"type": "number"}, "label": {"type": "string"}},
+            "required": ["depth_mm"],
+        },
+        "kitchen_run": {
+            "type": "object",
+            "properties": {
+                "depth_mm": {"type": "number"},
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string"},
+                            "width_mm": {"type": "number"},
+                        },
+                        "required": ["label", "width_mm"],
+                    },
+                },
+            },
+            "required": ["depth_mm", "segments"],
+        },
+        "sliding_door": {
+            "type": "object",
+            "description": "A single sliding door on the front wall. For more than one door, use sliding_doors instead.",
+            "properties": {
+                "width_mm": {"type": "number"},
+                "position_from_left_mm": {"type": "number"},
+                "height_mm": {"type": "number"},
+            },
+            "required": ["width_mm", "position_from_left_mm"],
+        },
+        "sliding_doors": {
+            "type": "array",
+            "description": (
+                "Multiple sliding doors on the front wall. Use this (not "
+                "sliding_door) whenever the user asks for two or more doors, "
+                "giving each its own position so they don't overlap."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "width_mm": {"type": "number"},
+                    "position_from_left_mm": {"type": "number"},
+                    "height_mm": {"type": "number"},
+                },
+                "required": ["width_mm", "position_from_left_mm"],
+            },
+        },
+        "windows": {
+            "type": "array",
+            "description": (
+                "Windows in the back wall (the wall the kitchen run sits "
+                "against), each drawn with a W:width*height callout."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "width_mm": {"type": "number"},
+                    "height_mm": {"type": "number"},
+                    "position_from_left_mm": {"type": "number"},
+                },
+                "required": ["width_mm", "height_mm", "position_from_left_mm"],
+            },
+        },
+        "deck": {
+            "type": "object",
+            "description": (
+                "Fold-out deck/terrace in front of the sliding-door wall, "
+                "drawn in plan with projection lines and its own dimensions."
+            ),
+            "properties": {"depth_mm": {"type": "number"}},
+            "required": ["depth_mm"],
+        },
+        "bathroom": {
+            "type": "object",
+            "description": (
+                "Single enclosed bathroom at one end (simple layouts only). For "
+                "anything with bedrooms or several rooms, use `rooms` instead and "
+                "include a bathroom room there. Fixtures belong HERE - never as "
+                "kitchen_run segments."
+            ),
+            "properties": {
+                "width_mm": {
+                    "type": "number",
+                    "description": "Interior width of the bathroom along the container length.",
+                },
+                "position": {"type": "string", "enum": ["left", "right"]},
+                "fixtures": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["toilet", "shower", "basin"]},
+                },
+            },
+            "required": ["width_mm", "position"],
+        },
+    },
+}
+
 CONTAINER_SCHEMA = {
     "type": "object",
     "properties": {
@@ -89,103 +229,24 @@ CONTAINER_SCHEMA = {
             },
             "required": ["length_mm", "width_mm", "height_mm"],
         },
-        "plan": {
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "kitchen_run": {
-                    "type": "object",
-                    "properties": {
-                        "depth_mm": {"type": "number"},
-                        "segments": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "label": {"type": "string"},
-                                    "width_mm": {"type": "number"},
-                                },
-                                "required": ["label", "width_mm"],
-                            },
-                        },
-                    },
-                    "required": ["depth_mm", "segments"],
+        "levels": {
+            "type": "array",
+            "description": (
+                "For STACKED / multi-storey modular homes (two or more containers "
+                "stacked). Each level is one storey with its own plan; include a room "
+                "of type 'stair' on levels that connect to another storey. When levels "
+                "is used, put the interior in each level's plan (not the top-level plan)."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "e.g. 'Ground Floor', 'Upper Floor'."},
+                    "plan": _PLAN_SCHEMA,
                 },
-                "sliding_door": {
-                    "type": "object",
-                    "description": "A single sliding door on the front wall. For more than one door, use sliding_doors instead.",
-                    "properties": {
-                        "width_mm": {"type": "number"},
-                        "position_from_left_mm": {"type": "number"},
-                        "height_mm": {"type": "number"},
-                    },
-                    "required": ["width_mm", "position_from_left_mm"],
-                },
-                "sliding_doors": {
-                    "type": "array",
-                    "description": (
-                        "Multiple sliding doors on the front wall. Use this (not "
-                        "sliding_door) whenever the user asks for two or more doors, "
-                        "giving each its own position so they don't overlap."
-                    ),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "width_mm": {"type": "number"},
-                            "position_from_left_mm": {"type": "number"},
-                            "height_mm": {"type": "number"},
-                        },
-                        "required": ["width_mm", "position_from_left_mm"],
-                    },
-                },
-                "windows": {
-                    "type": "array",
-                    "description": (
-                        "Windows in the back wall (the wall the kitchen run sits "
-                        "against), each drawn with a W:width*height callout."
-                    ),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "width_mm": {"type": "number"},
-                            "height_mm": {"type": "number"},
-                            "position_from_left_mm": {"type": "number"},
-                        },
-                        "required": ["width_mm", "height_mm", "position_from_left_mm"],
-                    },
-                },
-                "deck": {
-                    "type": "object",
-                    "description": (
-                        "Fold-out deck/terrace in front of the sliding-door wall, "
-                        "drawn in plan with projection lines and its own dimensions."
-                    ),
-                    "properties": {"depth_mm": {"type": "number"}},
-                    "required": ["depth_mm"],
-                },
-                "bathroom": {
-                    "type": "object",
-                    "description": (
-                        "Enclosed bathroom at one end of the container, drawn with a "
-                        "partition wall, a swing door, and real fixture symbols. Any "
-                        "bathroom fixtures (toilet, shower, basin) belong HERE - never "
-                        "as kitchen_run segments."
-                    ),
-                    "properties": {
-                        "width_mm": {
-                            "type": "number",
-                            "description": "Interior width of the bathroom along the container length.",
-                        },
-                        "position": {"type": "string", "enum": ["left", "right"]},
-                        "fixtures": {
-                            "type": "array",
-                            "items": {"type": "string", "enum": ["toilet", "shower", "basin"]},
-                        },
-                    },
-                    "required": ["width_mm", "position"],
-                },
+                "required": ["plan"],
             },
         },
+        "plan": _PLAN_SCHEMA,
         "front_elevation": {
             "type": "object",
             "properties": {
@@ -281,15 +342,30 @@ CONTAINER_SYSTEM_PROMPT = (
     "You translate plain-English container-home design requests into a structured JSON "
     "spec via the emit_container_home_spec tool. You never draw anything yourself - a "
     "separate deterministic renderer turns your JSON into a multi-view shop-drawing "
-    "sheet. The schema is a vocabulary, not a template: only include a section (kitchen "
-    "run, sliding door, glazing pattern, fold-out platform, vent window, bathroom, etc.) "
-    "when the user's request implies it.\n"
-    "- kitchen_run segments are strictly kitchen elements (hob/stove, counter, cabinet, "
-    "sink, fridge). Bathroom fixtures (toilet, shower, basin) always go in plan.bathroom "
-    "- never as kitchen_run segments.\n"
+    "sheet. The schema is a vocabulary, not a template: only include a section when the "
+    "user's request implies it.\n"
+    "- Choosing how to describe the interior:\n"
+    "  * Anything with BEDROOMS or MULTIPLE ROOMS (a home, an office with rooms, a "
+    "studio) -> use plan.rooms: a left-to-right series of typed rooms (bedroom, "
+    "bathroom, kitchen, living, office, dining, storage, stair) whose widths roughly "
+    "sum to the container's interior length. This is how the real reference homes are "
+    "built (e.g. bathroom | bedroom | kitchen | bedroom | bathroom).\n"
+    "  * A simple single-purpose unit (just a kitchenette + one bathroom, or an open "
+    "cafe counter) may instead use the flat kitchen_run + bathroom fields.\n"
+    "  * Never invent an empty container: if the user names rooms, model them in "
+    "plan.rooms. Never force a non-bathroom room into the bathroom field.\n"
+    "- STACKED / multi-storey / modular (two containers stacked, a two-storey home): use "
+    "the top-level levels array - one entry per storey, each with its own plan. Put a "
+    "room of type 'stair' on storeys that connect vertically. Do not also fill the "
+    "top-level plan when using levels.\n"
+    "- kitchen_run/kitchen-room segments are strictly kitchen elements (hob/stove, "
+    "counter, cabinet, sink, fridge). Bathroom fixtures (toilet, shower, basin) belong "
+    "in a bathroom (a bathroom room, or plan.bathroom) - never as kitchen segments.\n"
+    "- balcony vs deck: a fold-out ground-level terrace -> plan.deck; a railed raised "
+    "balcony (common on an upper storey) -> plan.balcony.\n"
     "- When the user resizes the container (e.g. 20ft -> 40ft), update container "
-    "dimensions and re-check that positioned elements (sliding door, windows, deck) "
-    "still sit sensibly within the new length.\n" + _SHARED_RULES
+    "dimensions and re-check that positioned elements still sit sensibly, and that "
+    "room widths still sum to the new interior length.\n" + _SHARED_RULES
 )
 
 
