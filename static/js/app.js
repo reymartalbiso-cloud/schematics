@@ -17,7 +17,13 @@
     librecadInstalled: false,
     chat: [], // {role: 'user'|'assistant'|'error', text}
     zoom: { scale: 1, tx: 0, ty: 0 },
+    // Container mode only - which sheets to draw. Defaults to plan-only;
+    // the full 4-view sheet is opt-in via the "Generate elevations too"
+    // action so a single edit doesn't force-render all 4 views every time.
+    views: ["plan"],
   };
+
+  const ALL_CONTAINER_VIEWS = ["plan", "front", "side", "back"];
 
   const EXAMPLES = {
     floorplan: [
@@ -219,6 +225,7 @@
       addMessage("assistant", `Reopened "${record.title}". Keep editing conversationally.`);
       dismissOnboarding(true);
       renderTitleblock();
+      updateElevationsButton();
       showView("editor");
     } catch (err) {
       toast(err.message, "error");
@@ -251,11 +258,13 @@
     state.revision = 0;
     state.chat = [];
     state.zoom = { scale: 1, tx: 0, ty: 0 };
+    state.views = ["plan"];
     el.chatLog.innerHTML = "";
     el.designTitle.value = "";
     setPreview(null);
     setSaveIndicator(false);
     updateModeButtons();
+    updateElevationsButton();
     renderExampleChips();
     renderTitleblock();
   }
@@ -270,6 +279,14 @@
     el.modeButtons.forEach((btn) => {
       btn.setAttribute("aria-selected", String(btn.dataset.mode === state.mode));
     });
+  }
+
+  function updateElevationsButton() {
+    const btn = $("btn-elevations");
+    btn.hidden = state.mode !== "container";
+    btn.disabled = !state.currentSpec;
+    const showingAll = state.views.length > 1;
+    btn.textContent = showingAll ? "Plan view only" : "Generate elevations too";
   }
 
   function requestModeSwitch(newMode) {
@@ -373,6 +390,7 @@
         mode: state.mode,
         text,
         current_spec: state.currentSpec,
+        views: state.mode === "container" ? state.views : undefined,
       });
       state.currentSpec = data.spec;
       state.librecadInstalled = data.librecad_installed;
@@ -383,6 +401,7 @@
       setPreview(data.preview_data_uri);
       renderTitleblock();
       updateLibrecadButton();
+      updateElevationsButton();
       clearPending(pendingMsg);
       addMessage("assistant", "Updated the preview — take a look, or keep iterating.");
     } catch (err) {
@@ -397,6 +416,27 @@
   function updateLibrecadButton() {
     $("btn-librecad").disabled = !state.librecadInstalled;
   }
+
+  $("btn-elevations").addEventListener("click", async () => {
+    if (!state.currentSpec || state.mode !== "container") return;
+    const nextViews = state.views.length > 1 ? ["plan"] : ALL_CONTAINER_VIEWS;
+    const btn = $("btn-elevations");
+    btn.disabled = true;
+    try {
+      const data = await postJSON("/api/render", {
+        mode: state.mode,
+        spec: state.currentSpec,
+        views: nextViews,
+      });
+      state.views = nextViews;
+      setPreview(data.preview_data_uri);
+      toast(nextViews.length > 1 ? "Generated the full elevation sheet." : "Back to plan view only.");
+    } catch (err) {
+      toast(err.message, "error");
+    } finally {
+      updateElevationsButton();
+    }
+  });
 
   // ---------------------------------------------------------------
   // Preview + titleblock
@@ -536,7 +576,11 @@
       return;
     }
     try {
-      const blob = await postForBlob("/api/download", { mode: state.mode, spec: state.currentSpec });
+      const blob = await postForBlob("/api/download", {
+        mode: state.mode,
+        spec: state.currentSpec,
+        views: state.mode === "container" ? state.views : undefined,
+      });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -553,7 +597,11 @@
   $("btn-librecad").addEventListener("click", async () => {
     if (!state.currentSpec) return;
     try {
-      await postJSON("/api/open_librecad", { mode: state.mode, spec: state.currentSpec });
+      await postJSON("/api/open_librecad", {
+        mode: state.mode,
+        spec: state.currentSpec,
+        views: state.mode === "container" ? state.views : undefined,
+      });
       toast("Opened in LibreCAD.");
     } catch (err) {
       toast(err.message, "error");

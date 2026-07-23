@@ -70,12 +70,20 @@ def _generate_spec(mode, text, current_spec, context_block):
     return getattr(claude_client, f"generate_{mode}_spec")(text, current_spec, context_block)
 
 
-def _build_dxf_bytes(mode, spec):
+def _build_doc(mode, spec, views=None):
+    # Only container mode has a views concept (plan vs. full elevation
+    # sheet); floorplan is always a single view.
+    engine = ENGINES[mode]
+    if mode == "container":
+        return engine.build_doc(spec, views=views)
+    return engine.build_doc(spec)
+
+
+def _build_dxf_bytes(mode, spec, views=None):
     """Build DXF bytes from a client-supplied spec, or None + an error message
     if the spec doesn't describe valid geometry."""
-    engine = ENGINES[mode]
     try:
-        return engine.doc_to_dxf_bytes(engine.build_doc(spec)), None
+        return ENGINES[mode].doc_to_dxf_bytes(_build_doc(mode, spec, views)), None
     except Exception as exc:
         return None, str(exc)
 
@@ -122,6 +130,7 @@ def api_prompt():
     mode = data.get("mode")
     text = (data.get("text") or "").strip()
     current_spec = data.get("current_spec")
+    views = data.get("views")
 
     if mode not in ENGINES:
         return jsonify({"error": "invalid mode"}), 400
@@ -135,9 +144,8 @@ def api_prompt():
     except Exception as exc:
         return jsonify({"error": str(exc)}), 502
 
-    engine = ENGINES[mode]
-    doc = engine.build_doc(spec)
-    preview_uri = _to_data_uri(engine.doc_to_preview_bytes(doc))
+    doc = _build_doc(mode, spec, views)
+    preview_uri = _to_data_uri(ENGINES[mode].doc_to_preview_bytes(doc))
 
     memory.log_design(mode, memory.summarize_spec(mode, spec), mem)
 
@@ -150,14 +158,35 @@ def api_prompt():
     )
 
 
+@app.route("/api/render", methods=["POST"])
+def api_render():
+    """Re-render a preview from an already-generated spec without calling
+    Claude again - used for the container-mode "generate elevations too"
+    action, which only changes which views are drawn, not the spec itself."""
+    data = request.get_json(force=True) or {}
+    mode, spec = data.get("mode"), data.get("spec")
+    views = data.get("views")
+    if mode not in ENGINES or spec is None:
+        return jsonify({"error": "mode and spec are required"}), 400
+
+    try:
+        doc = _build_doc(mode, spec, views)
+        preview_uri = _to_data_uri(ENGINES[mode].doc_to_preview_bytes(doc))
+    except Exception as exc:
+        return jsonify({"error": f"Invalid spec: {exc}"}), 400
+
+    return jsonify({"preview_data_uri": preview_uri})
+
+
 @app.route("/api/download", methods=["POST"])
 def api_download():
     data = request.get_json(force=True) or {}
     mode, spec = data.get("mode"), data.get("spec")
+    views = data.get("views")
     if mode not in ENGINES or spec is None:
         return jsonify({"error": "mode and spec are required"}), 400
 
-    dxf_bytes, error = _build_dxf_bytes(mode, spec)
+    dxf_bytes, error = _build_dxf_bytes(mode, spec, views)
     if error:
         return jsonify({"error": f"Invalid spec: {error}"}), 400
 
@@ -174,6 +203,7 @@ def api_download():
 def api_open_librecad():
     data = request.get_json(force=True) or {}
     mode, spec = data.get("mode"), data.get("spec")
+    views = data.get("views")
     if mode not in ENGINES or spec is None:
         return jsonify({"error": "mode and spec are required"}), 400
 
@@ -181,7 +211,7 @@ def api_open_librecad():
     if not librecad_path:
         return jsonify({"error": "LibreCAD is not installed on this machine"}), 404
 
-    dxf_bytes, error = _build_dxf_bytes(mode, spec)
+    dxf_bytes, error = _build_dxf_bytes(mode, spec, views)
     if error:
         return jsonify({"error": f"Invalid spec: {error}"}), 400
 

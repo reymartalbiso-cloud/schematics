@@ -30,7 +30,10 @@ def test_floorplan_first_generation(client, monkeypatch):
     body = dl.data
     assert len(body) > 0
     assert b"LWPOLYLINE" in body
-    assert b"DIMENSION" in body
+    # Dimensions are drawn by hand (plain LINE + MTEXT, not a DIMENSION
+    # entity) - see dxf_render.draw_measurement for why. Check for the
+    # actual measurement text instead: the 6000mm wall's dimension label.
+    assert b"6000" in body
 
 
 # ---------------------------------------------------------------------------

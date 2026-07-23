@@ -9,6 +9,13 @@ import math
 import ezdxf
 
 from dxf_render import doc_to_dxf_bytes, doc_to_preview_bytes  # noqa: F401 - re-exported
+from dxf_render import add as _add
+from dxf_render import draw_measurement
+from dxf_render import length as _length
+from dxf_render import perp as _perp
+from dxf_render import scale as _scale
+from dxf_render import sub as _sub
+from dxf_render import unit as _unit
 
 
 LAYER_DEFS = {
@@ -18,32 +25,6 @@ LAYER_DEFS = {
     "TEXT": 2,
     "DIMS": 3,
 }
-
-
-def _sub(a, b):
-    return (a[0] - b[0], a[1] - b[1])
-
-
-def _add(a, b):
-    return (a[0] + b[0], a[1] + b[1])
-
-
-def _scale(v, s):
-    return (v[0] * s, v[1] * s)
-
-
-def _length(v):
-    return math.hypot(v[0], v[1])
-
-
-def _unit(v):
-    length = _length(v)
-    return (v[0] / length, v[1] / length)
-
-
-def _perp(v):
-    # Rotate 90 degrees counter-clockwise.
-    return (-v[1], v[0])
 
 
 def _wall_vectors(wall):
@@ -154,21 +135,23 @@ def _draw_rooms(msp, rooms):
         mtext.set_location(insert=tuple(room["label_position"]))
 
 
+# Real ezdxf DIMENSION entities are correct, standards-compliant DXF (verified
+# down to the per-entity XDATA override and the base DIMSTYLE table record),
+# but real-world testing found LibreCAD never displays their text regardless
+# of style/height configuration - a rendering gap specific to how it handles
+# DIMENSION entities, since plain MTEXT renders fine in the same file. Drawn
+# by hand instead, from the same LINE/MTEXT primitives already proven to
+# render identically everywhere. Sized to sit in the same neighborhood as
+# room-label text (char_height 200).
 def _draw_dimensions(msp, dimensions):
     for dim in dimensions:
         start = tuple(dim["start"])
         end = tuple(dim["end"])
         offset = dim["offset"]
-        direction = _unit(_sub(end, start))
-        perpendicular = _perp(direction)
-        base = _add(start, _scale(perpendicular, offset))
-        dim_entity = msp.add_linear_dim(
-            base=base,
-            p1=start,
-            p2=end,
-            dxfattribs={"layer": "DIMS"},
+        draw_measurement(
+            msp, start, end, offset, "DIMS",
+            text_height=180, gap=80, overshoot=80, tick_size=120,
         )
-        dim_entity.render()
 
 
 def build_doc(spec: dict):

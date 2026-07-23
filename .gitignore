@@ -9,3 +9,6 @@ __pycache__/
 # Local data + logs
 memory_data/
 server.log
+
+# Generated design output (downloaded/test DXFs), not source
+*.dxf
