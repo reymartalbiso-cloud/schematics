@@ -663,6 +663,64 @@ main#app { min-height: calc(100vh - 61px); }
 
 .modal-foot { margin-top: 18px; display: flex; justify-content: flex-end; }
 
+/* ---------- intake ---------- */
+
+.modal-intake { max-width: 560px; }
+.intake-q { margin: 0 0 18px; }
+.intake-q > .intake-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--line-muted);
+  margin-bottom: 8px;
+}
+.intake-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.intake-opt {
+  position: relative;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 7px 13px;
+  border: 1px solid var(--grid-line);
+  border-radius: 999px;
+  background: var(--ink-2);
+  color: var(--line-muted);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.intake-opt:hover { border-color: var(--signal); color: var(--line); }
+.intake-opt input { position: absolute; opacity: 0; pointer-events: none; }
+.intake-opt.is-on {
+  border-color: var(--signal);
+  background: var(--signal-soft);
+  color: var(--line);
+}
+.intake-text, .intake-number {
+  width: 100%;
+  background: var(--ink-2);
+  border: 1px solid var(--grid-line);
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  color: var(--line);
+  font-size: 13px;
+  font-family: inherit;
+}
+.intake-number { width: 120px; }
+.intake-text:focus, .intake-number:focus { border-color: var(--signal); outline: none; }
+.intake-inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.intake-inline .intake-sub { font-size: 12px; color: var(--line-muted); }
+.intake-foot {
+  margin-top: 20px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.intake-skip {
+  background: none; border: none; padding: 4px 0;
+  color: var(--line-muted); font-size: 13px; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.intake-skip:hover { color: var(--line); }
+
 /* ---------- toast ---------- */
 
 .toast {

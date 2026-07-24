@@ -73,6 +73,17 @@ def _generate_spec(mode, text, current_spec, context_block, correction_problems=
     )
 
 
+def _safe_validate(mode, spec):
+    """validate_spec, but a crash inside a check never propagates as a 500 -
+    it degrades to 'no problems found' so the deterministic drawing step
+    becomes the backstop instead."""
+    try:
+        return validation.validate_spec(mode, spec)
+    except Exception:
+        app.logger.exception("validate_spec crashed (treated as no problems)")
+        return []
+
+
 def _build_doc(mode, spec, views=None):
     # Only container mode has a views concept (plan vs. full elevation
     # sheet); floorplan is always a single view.
@@ -153,8 +164,10 @@ def api_prompt():
 
     # 2) Validate - and if the spec isn't physically sensible, feed the exact
     #    problems back to Claude for ONE self-correction attempt before giving
-    #    up with a specific, actionable error.
-    problems = validation.validate_spec(mode, spec)
+    #    up with a specific, actionable error. Validation is defensive: a bug
+    #    in a check must not 500 the request, so treat a validator crash as
+    #    "no problems found" and let the drawing step be the backstop.
+    problems = _safe_validate(mode, spec)
     if problems:
         # One self-correction attempt: hand Claude the failing spec + the exact
         # problems and ask for a fix. A container's physical dimensions are a
@@ -171,7 +184,7 @@ def api_prompt():
                 spec = corrected
         except Exception:
             pass  # keep the original problems for the message below
-        problems = validation.validate_spec(mode, spec)
+        problems = _safe_validate(mode, spec)
         if problems:
             return jsonify({"error": "This design doesn't fit the container you chose: " + "; ".join(problems)}), 422
 
@@ -182,7 +195,12 @@ def api_prompt():
     except Exception as exc:
         return jsonify({"error": f"The spec was valid but couldn't be drawn: {exc}"}), 422
 
-    memory.log_design(mode, memory.summarize_spec(mode, spec), mem)
+    # Memory logging is best-effort - a logging hiccup must never fail an
+    # otherwise-successful generation.
+    try:
+        memory.log_design(mode, memory.summarize_spec(mode, spec), mem)
+    except Exception:
+        app.logger.exception("log_design failed (non-fatal)")
 
     return jsonify(
         {

@@ -136,6 +136,24 @@
 
 </main>
 
+<!-- ================= INTAKE MODAL ================= -->
+<div class="modal-backdrop" id="intake-modal-backdrop" hidden>
+  <div class="modal modal-intake" role="dialog" aria-modal="true" aria-labelledby="intake-modal-title">
+    <div class="modal-head">
+      <h2 id="intake-modal-title">New design</h2>
+      <button class="modal-close" id="intake-modal-close" type="button" aria-label="Close">×</button>
+    </div>
+    <p class="modal-sub">A few quick questions for a stronger first draft. You can change anything afterward by chatting — or skip and describe it yourself.</p>
+    <form id="intake-form">
+      <div id="intake-fields"></div>
+      <div class="intake-foot">
+        <button class="intake-skip" id="intake-skip" type="button">Skip — I'll describe it myself</button>
+        <button class="btn btn-primary" type="submit">Generate first draft</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- ================= MEMORY MODAL ================= -->
 <div class="modal-backdrop" id="memory-modal-backdrop" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="memory-modal-title">

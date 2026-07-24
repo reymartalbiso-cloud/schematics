@@ -84,6 +84,10 @@
     saveBackdrop: $("save-modal-backdrop"),
     saveForm: $("save-modal-form"),
     saveInput: $("save-modal-input"),
+    intakeBackdrop: $("intake-modal-backdrop"),
+    intakeForm: $("intake-form"),
+    intakeFields: $("intake-fields"),
+    intakeTitle: $("intake-modal-title"),
   };
 
   // ---------------------------------------------------------------
@@ -279,8 +283,194 @@
   function startNewDesign(mode) {
     resetEditorState(mode);
     showView("editor");
-    el.chatInput.focus();
+    openIntake(mode);
   }
+
+  // ---------------------------------------------------------------
+  // Structured intake — a short fixed questionnaire before the chat,
+  // front-loading the handful of things that most shape a first draft.
+  // Skippable; composes with the on-demand clarification mechanism.
+  // ---------------------------------------------------------------
+  const CONTAINER_SIZES = {
+    "20ft": "a 20ft container (6058mm long, 2438mm wide, 2896mm high)",
+    "40ft": "a 40ft container (12192mm long, 2438mm wide, 2896mm high)",
+  };
+
+  function intakeFieldsHtml(mode) {
+    if (mode === "container") {
+      return `
+      <div class="intake-q">
+        <span class="intake-label">Container size</span>
+        <div class="intake-options">
+          <label class="intake-opt is-on"><input type="radio" name="size" value="20ft" checked> 20ft (6058mm)</label>
+          <label class="intake-opt"><input type="radio" name="size" value="40ft"> 40ft (12192mm)</label>
+          <label class="intake-opt" data-reveal="in-size-custom"><input type="radio" name="size" value="custom"> Custom</label>
+        </div>
+        <input class="intake-number" id="in-size-custom" hidden placeholder="e.g. 9000" style="margin-top:8px;width:200px;" aria-label="Custom length in mm">
+      </div>
+      <div class="intake-q">
+        <span class="intake-label">What's it for?</span>
+        <div class="intake-options">
+          <label class="intake-opt is-on"><input type="radio" name="purpose" value="home" checked> Home</label>
+          <label class="intake-opt"><input type="radio" name="purpose" value="office"> Office</label>
+          <label class="intake-opt"><input type="radio" name="purpose" value="studio"> Studio</label>
+          <label class="intake-opt"><input type="radio" name="purpose" value="cafe"> Cafe</label>
+          <label class="intake-opt" data-reveal="in-purpose-custom"><input type="radio" name="purpose" value="other"> Other</label>
+        </div>
+        <input class="intake-text" id="in-purpose-custom" hidden placeholder="describe the use" style="margin-top:8px;">
+      </div>
+      <div class="intake-q">
+        <span class="intake-label">Must-haves</span>
+        <div class="intake-options">
+          <label class="intake-opt"><input type="checkbox" name="must" value="kitchen"> Kitchen</label>
+          <label class="intake-opt"><input type="checkbox" name="must" value="bathroom"> Bathroom</label>
+          <label class="intake-opt" data-reveal="in-bed-wrap"><input type="checkbox" name="must" value="bedrooms"> Bedroom(s)</label>
+          <label class="intake-opt"><input type="checkbox" name="must" value="living"> Living area</label>
+          <label class="intake-opt"><input type="checkbox" name="must" value="deck"> Deck / balcony</label>
+        </div>
+        <div class="intake-inline" id="in-bed-wrap" hidden style="margin-top:8px;">
+          <span class="intake-sub">How many bedrooms?</span>
+          <input class="intake-number" id="in-bed-count" type="number" min="1" max="6" value="2" aria-label="Number of bedrooms">
+        </div>
+      </div>
+      <div class="intake-q">
+        <span class="intake-label">Main entry</span>
+        <div class="intake-options">
+          <label class="intake-opt is-on"><input type="radio" name="entry" value="front centre" checked> Front — centre</label>
+          <label class="intake-opt"><input type="radio" name="entry" value="front left"> Front — left</label>
+          <label class="intake-opt"><input type="radio" name="entry" value="front right"> Front — right</label>
+          <label class="intake-opt"><input type="radio" name="entry" value=""> Not sure</label>
+        </div>
+      </div>
+      <div class="intake-q">
+        <span class="intake-label">Anything else?</span>
+        <textarea class="intake-text" id="in-notes" rows="2" placeholder="finishes, special features, constraints…"></textarea>
+      </div>`;
+    }
+    // floorplan
+    return `
+      <div class="intake-q">
+        <span class="intake-label">Overall size</span>
+        <input class="intake-text" id="in-size" placeholder="e.g. 6m x 4m" style="max-width:220px;">
+      </div>
+      <div class="intake-q">
+        <span class="intake-label">What's the space?</span>
+        <div class="intake-options">
+          <label class="intake-opt is-on"><input type="radio" name="purpose" value="room" checked> Single room</label>
+          <label class="intake-opt"><input type="radio" name="purpose" value="house"> House</label>
+          <label class="intake-opt"><input type="radio" name="purpose" value="office"> Office</label>
+          <label class="intake-opt" data-reveal="in-purpose-custom"><input type="radio" name="purpose" value="other"> Other</label>
+        </div>
+        <input class="intake-text" id="in-purpose-custom" hidden placeholder="describe the use" style="margin-top:8px;">
+      </div>
+      <div class="intake-q">
+        <span class="intake-label">Rooms needed</span>
+        <input class="intake-text" id="in-rooms" placeholder="e.g. living room, kitchen, bathroom">
+      </div>
+      <div class="intake-q">
+        <span class="intake-label">Main door wall</span>
+        <div class="intake-options">
+          <label class="intake-opt is-on"><input type="radio" name="door" value="south" checked> South</label>
+          <label class="intake-opt"><input type="radio" name="door" value="north"> North</label>
+          <label class="intake-opt"><input type="radio" name="door" value="east"> East</label>
+          <label class="intake-opt"><input type="radio" name="door" value="west"> West</label>
+        </div>
+      </div>
+      <div class="intake-q">
+        <span class="intake-label">Anything else?</span>
+        <textarea class="intake-text" id="in-notes" rows="2" placeholder="fixtures, constraints…"></textarea>
+      </div>`;
+  }
+
+  function openIntake(mode) {
+    el.intakeTitle.textContent = mode === "container" ? "New Container Home" : "New Floor Plan";
+    el.intakeFields.innerHTML = intakeFieldsHtml(mode);
+    el.intakeBackdrop.hidden = false;
+  }
+
+  // Recompute chip highlight + conditional reveals whenever an input changes.
+  el.intakeFields.addEventListener("change", () => {
+    el.intakeFields.querySelectorAll(".intake-opt").forEach((opt) => {
+      const input = opt.querySelector("input");
+      opt.classList.toggle("is-on", input.checked);
+      const revId = opt.dataset.reveal;
+      if (revId) {
+        const target = document.getElementById(revId);
+        if (target) target.hidden = !input.checked;
+      }
+    });
+  });
+
+  function intakeVal(sel) {
+    const node = el.intakeFields.querySelector(sel);
+    return node ? node.value.trim() : "";
+  }
+
+  function assembleIntakePrompt(mode) {
+    if (mode === "container") {
+      const size = intakeVal('input[name="size"]:checked') || "20ft";
+      let sizeStr = CONTAINER_SIZES[size];
+      if (size === "custom") {
+        const mm = intakeVal("#in-size-custom");
+        sizeStr = mm ? `a container ${mm}mm long, 2438mm wide, 2896mm high` : "a container";
+      }
+      let purpose = intakeVal('input[name="purpose"]:checked') || "home";
+      if (purpose === "other") purpose = intakeVal("#in-purpose-custom") || "space";
+      const labels = { kitchen: "a kitchen", bathroom: "a bathroom", living: "a living area", deck: "a deck / balcony" };
+      const must = Array.from(el.intakeFields.querySelectorAll('input[name="must"]:checked')).map((i) => {
+        if (i.value === "bedrooms") { const n = intakeVal("#in-bed-count") || "2"; return `${n} bedroom${n === "1" ? "" : "s"}`; }
+        return labels[i.value];
+      });
+      const entry = intakeVal('input[name="entry"]:checked');
+      const notes = intakeVal("#in-notes");
+
+      let p = `${sizeStr.charAt(0).toUpperCase()}${sizeStr.slice(1)} used as a ${purpose}.`;
+      if (must.length) p += ` It must include ${joinList(must)}.`;
+      if (entry) {
+        const where = entry.replace("front ", "");
+        p += ` The main entry is a sliding glass door on the front wall${where === "centre" ? ", centred" : ", toward the " + where}.`;
+      }
+      if (notes) p += ` Additional notes: ${notes}.`;
+      return p;
+    }
+    // floorplan
+    const size = intakeVal("#in-size");
+    let purpose = intakeVal('input[name="purpose"]:checked') || "room";
+    if (purpose === "other") purpose = intakeVal("#in-purpose-custom") || "space";
+    const rooms = intakeVal("#in-rooms");
+    const door = intakeVal('input[name="door"]:checked');
+    const notes = intakeVal("#in-notes");
+    let p = `A floor plan for a ${purpose}${size ? `, ${size}` : ""}.`;
+    if (rooms) p += ` Rooms: ${rooms}.`;
+    if (door) p += ` Main entry door on the ${door} wall.`;
+    p += " Include dimension lines on the walls.";
+    if (notes) p += ` Additional notes: ${notes}.`;
+    return p;
+  }
+
+  function joinList(items) {
+    if (items.length <= 1) return items[0] || "";
+    return items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
+  }
+
+  el.intakeForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const prompt = assembleIntakePrompt(state.mode);
+    el.intakeBackdrop.hidden = true;
+    submitPrompt(prompt, "Set up a new " + (state.mode === "container" ? "container home" : "floor plan") + " (via the quick intake).");
+  });
+  $("intake-skip").addEventListener("click", () => {
+    el.intakeBackdrop.hidden = true;
+    el.chatInput.focus();
+  });
+  $("intake-modal-close").addEventListener("click", () => {
+    el.intakeBackdrop.hidden = true;
+    el.chatInput.focus();
+  });
+  el.intakeBackdrop.addEventListener("click", (e) => {
+    if (e.target === el.intakeBackdrop) el.intakeBackdrop.hidden = true;
+  });
+  modalBackdrops.push(el.intakeBackdrop);  // Escape closes it too (acts as skip)
 
   function updateModeButtons() {
     el.modeButtons.forEach((btn) => {
@@ -380,12 +570,20 @@
     state.chat.pop();
   }
 
-  el.chatForm.addEventListener("submit", async (e) => {
+  el.chatForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const text = el.chatInput.value.trim();
     if (!text) return;
     el.chatInput.value = "";
-    addMessage("user", text);
+    submitPrompt(text);
+  });
+
+  // Shared generation path used by both the chat box and the structured
+  // intake. `userLabel` is what gets echoed in the chat as the user's turn
+  // (defaults to the sent text; the intake shows a friendly summary instead
+  // of the long assembled prompt).
+  async function submitPrompt(text, userLabel) {
+    addMessage("user", userLabel || text);
     dismissOnboarding(false);
     el.chatSend.disabled = true;
     el.plotSweep.hidden = false;
@@ -439,7 +637,7 @@
       el.chatSend.disabled = false;
       el.plotSweep.hidden = true;
     }
-  });
+  }
 
   function updateLibrecadButton() {
     $("btn-librecad").disabled = !state.librecadInstalled;

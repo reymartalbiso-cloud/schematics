@@ -260,3 +260,21 @@ def test_validation_hard_failure_returns_specific_error(client, monkeypatch):
     assert resp.status_code == 422
     msg = resp.get_json()["error"]
     assert "kitchen run" in msg.lower() and "interior" in msg.lower()  # names the actual conflict
+
+
+# ---------------------------------------------------------------------------
+# 11. Regression: a container with back-wall windows must render (guards the
+#     label_boxes ordering bug that 500'd any windowed design).
+# ---------------------------------------------------------------------------
+def test_container_with_windows_renders(client):
+    spec = {
+        "container": {"length_mm": 6058, "width_mm": 2438, "height_mm": 2896},
+        "plan": {
+            "title": "Plan",
+            "kitchen_run": {"depth_mm": 600, "segments": [{"label": "Sink", "width_mm": 680}]},
+            "windows": [{"width_mm": 1000, "height_mm": 1000, "position_from_left_mm": 2500}],
+        },
+    }
+    dl = client.post("/api/download", json={"mode": "container", "spec": spec})
+    assert dl.status_code == 200
+    assert b"W:1000*1000mm" in dl.data

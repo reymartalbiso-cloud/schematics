@@ -792,6 +792,12 @@ def draw_plan_view(msp, spec, origin):
         glass_front=bool(doors), back_gaps=back_gaps,
     )
 
+    partition_faces = ()
+    # Bounding boxes of labels already placed, so open-ended placeholder zones
+    # can avoid overlapping them (basic collision avoidance). Declared up front
+    # because the window-callout loop below already registers into it.
+    label_boxes = []
+
     # --- Back (top) wall windows: jambs, slider panes, dim, W: callout ---
     # Width dim and callout stack ABOVE the wall (the kitchen band sits
     # directly beneath it inside, so an interior dim would strike through
@@ -811,11 +817,6 @@ def draw_plan_view(msp, spec, origin):
         cx_w = (w_x0 + w_x1) / 2.0
         _mtext_simple(msp, callout, cx_w, oy + width + 400, 110, "TEXT")
         label_boxes.append(label_bbox(cx_w, oy + width + 400, callout, 110))
-
-    partition_faces = ()
-    # Bounding boxes of labels already placed, so open-ended placeholder zones
-    # can avoid overlapping them (basic collision avoidance).
-    label_boxes = []
 
     # --- General multi-room interior (bedroom/bath/kitchen/living/...) ---
     # When plan.rooms is given, it fully describes the partitioned interior
