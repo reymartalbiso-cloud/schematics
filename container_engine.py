@@ -26,6 +26,7 @@ from dxf_render import doc_to_dxf_bytes  # noqa: F401 - re-exported
 from dxf_render import doc_to_preview_bytes as _doc_to_preview_bytes
 from dxf_render import draw_measurement
 from dxf_render import draw_placeholder_zone
+from dxf_render import label_bbox
 
 
 ROW_GAP_MM = 1500
@@ -631,7 +632,7 @@ def _partition(msp, xc, pt, y_front, y_back, door_from_front=200):
     return px0, px1
 
 
-def _draw_room_contents(msp, room, rx0, iy0, rx1, iy1):
+def _draw_room_contents(msp, room, rx0, iy0, rx1, iy1, occupied=None):
     """Draw furniture + label for one room given its interior bounds."""
     rtype = _room_type(room)
     name = room.get("name") or rtype.title()
@@ -659,6 +660,8 @@ def _draw_room_contents(msp, room, rx0, iy0, rx1, iy1):
 
     label_y = iy0 + 200 if rtype in ("bedroom", "living", "office", "dining", "storage", "stair", "empty") else iy0 + 120
     _mtext_simple(msp, name, cx, label_y, 110, "TEXT")
+    if occupied is not None:
+        occupied.append(label_bbox(cx, label_y, name, 110))
 
 
 def _draw_inline_kitchen(msp, room, rx0, iy0, rx1, iy1):
@@ -708,12 +711,13 @@ def _draw_inline_bathroom(msp, room, rx0, iy0, rx1, iy1):
             _draw_toilet(msp, (rx0 + s + rx1) / 2.0 if "shower" in fixtures else (rx0 + rx1) / 2.0, iy1, "KITCHEN")
 
 
-def _draw_room_layout(msp, rooms, ix0, iy0, ix1, iy1, pt=60):
+def _draw_room_layout(msp, rooms, ix0, iy0, ix1, iy1, pt=60, occupied=None):
     """Lay rooms left-to-right across the interior, drawing partition walls
     (thickness `pt`) between them and furniture within. Absolute widths are
     honored; the last room absorbs any remainder so the rooms always fill the
     container and the drawn geometry matches the dimensions. Returns the list
-    of partition face x-positions for the bottom dimension chain."""
+    of partition face x-positions for the bottom dimension chain. Room-label
+    bounding boxes are appended to `occupied` for placeholder collision tests."""
     interior = ix1 - ix0
     widths = [max(0.0, r.get("width_mm", 0)) for r in rooms]
     total = sum(widths)
@@ -737,7 +741,7 @@ def _draw_room_layout(msp, rooms, ix0, iy0, ix1, iy1, pt=60):
         if i < len(rooms) - 1:
             f0, f1 = _partition(msp, b1, pt, iy0, iy1)
             partition_faces.extend([f0, f1])
-        _draw_room_contents(msp, room, cx0, iy0, cx1, iy1)
+        _draw_room_contents(msp, room, cx0, iy0, cx1, iy1, occupied=occupied)
     return partition_faces
 
 
@@ -804,15 +808,20 @@ def draw_plan_view(msp, spec, origin):
         msp.add_line((mid_x - (w_x1 - w_x0) * 0.05, y_lo), (w_x1, y_lo), dxfattribs={"layer": "GLAZING"})
         _dim(msp, (w_x0, oy + width), (w_x1, oy + width), 150, "DIMS")
         callout = f"W:{round(win.get('width_mm', 0))}*{round(win.get('height_mm', 0))}mm"
-        _mtext_simple(msp, callout, (w_x0 + w_x1) / 2.0, oy + width + 400, 110, "TEXT")
+        cx_w = (w_x0 + w_x1) / 2.0
+        _mtext_simple(msp, callout, cx_w, oy + width + 400, 110, "TEXT")
+        label_boxes.append(label_bbox(cx_w, oy + width + 400, callout, 110))
 
     partition_faces = ()
+    # Bounding boxes of labels already placed, so open-ended placeholder zones
+    # can avoid overlapping them (basic collision avoidance).
+    label_boxes = []
 
     # --- General multi-room interior (bedroom/bath/kitchen/living/...) ---
     # When plan.rooms is given, it fully describes the partitioned interior
     # and supersedes the legacy single-bathroom + kitchen-run path below.
     if rooms:
-        partition_faces = _draw_room_layout(msp, rooms, ix0, iy0, ix1, iy1, thickness)
+        partition_faces = _draw_room_layout(msp, rooms, ix0, iy0, ix1, iy1, thickness, occupied=label_boxes)
 
     # --- Bathroom at one end (partition + swing door + fixture symbols) ---
     kitchen_x0 = ix0
@@ -860,8 +869,9 @@ def draw_plan_view(msp, spec, origin):
                     # placed below the dashed midline, not through it.
                     label = seg.get("label", "")
                     if label:
-                        _mtext_simple(msp, label, (seg_x0 + seg_x1) / 2.0,
-                                      (band_y0 + mid_y) / 2.0, 90, "KITCHEN")
+                        seg_cx, seg_cy = (seg_x0 + seg_x1) / 2.0, (band_y0 + mid_y) / 2.0
+                        _mtext_simple(msp, label, seg_cx, seg_cy, 90, "KITCHEN")
+                        label_boxes.append(label_bbox(seg_cx, seg_cy, label, 90))
 
                 cursor_x = seg_x1
                 boundary_xs.append(cursor_x)
@@ -956,7 +966,9 @@ def draw_plan_view(msp, spec, origin):
         # Without one it goes inside the room above the door - below the
         # wall it would land exactly on the joint-chain text row.
         callout_y = deck_bottom_y + 170 if (deck or balcony) else iy0 + 200
-        _mtext_simple(msp, callout, (d_x0 + d_x1) / 2.0, callout_y, 130, "TEXT")
+        cx_d = (d_x0 + d_x1) / 2.0
+        _mtext_simple(msp, callout, cx_d, callout_y, 130, "TEXT")
+        label_boxes.append(label_bbox(cx_d, callout_y, callout, 130))
 
     # --- Bottom breakdown chain, anchored exterior-to-exterior ---
     # Sums to the container's overall length by construction, so it can
@@ -981,7 +993,7 @@ def draw_plan_view(msp, spec, origin):
     for element in spec.get("additional_elements", []) or []:
         pos = element.get("approx_position") or [0, 0]
         shifted = dict(element, approx_position=[ox + pos[0], oy + pos[1]])
-        draw_placeholder_zone(msp, shifted, "EXTRAS", text_layer="TEXT")
+        draw_placeholder_zone(msp, shifted, "EXTRAS", text_layer="TEXT", occupied=label_boxes)
 
     title = plan.get("title")
     _title_below(msp, title, ox + length / 2.0, bottom_dim_y - 450)

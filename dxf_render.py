@@ -187,7 +187,20 @@ def draw_measurement(
         pass
 
 
-def draw_placeholder_zone(msp, element, layer, text_layer=None, text_height=140):
+def label_bbox(cx, cy, text, height):
+    """Approximate bounding box of a centred MTEXT label, for collision tests.
+    Width uses ~0.62*height per character (the condensed CAD face); the box is
+    ~1.4*height tall."""
+    w = max(1, len(str(text))) * height * 0.62
+    h = height * 1.4
+    return (cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0)
+
+
+def _rects_overlap(a, b, pad=0.0):
+    return not (a[2] + pad <= b[0] or b[2] + pad <= a[0] or a[3] + pad <= b[1] or b[3] + pad <= a[1])
+
+
+def draw_placeholder_zone(msp, element, layer, text_layer=None, text_height=140, occupied=None):
     """Draw one open-ended 'additional element' as a dashed labeled zone.
 
     This is deliberately lower fidelity than a first-class element (kitchen
@@ -195,6 +208,13 @@ def draw_placeholder_zone(msp, element, layer, text_layer=None, text_height=140)
     drawing logic yet still shows up as a visible, labeled rectangle rather
     than being silently dropped. `element` = {label, approx_position [cx,cy],
     approx_size_mm [w,h], notes?}. Position is the CENTER of the zone.
+
+    `occupied` (a list of bounding boxes of labels already drawn) enables
+    basic collision avoidance: a placeholder label that would overlap an
+    existing label (room name, door callout, etc.) is nudged to the first
+    clear candidate position and given a short leader back to its zone, so
+    the labels don't garble each other. The chosen box is appended to
+    `occupied` so multiple placeholders also avoid one another.
     """
     pos = element.get("approx_position") or [0, 0]
     size = element.get("approx_size_mm") or [1000, 1000]
@@ -206,18 +226,39 @@ def draw_placeholder_zone(msp, element, layer, text_layer=None, text_height=140)
     msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": layer, "linetype": "DASHED"})
 
     label = element.get("label") or "element"
+    tlayer = text_layer or layer
+    occupied = occupied if occupied is not None else []
+
+    # Candidate label anchors: centre first, then progressively further above
+    # and below the zone (labels overflow horizontally, so vertical separation
+    # is what actually declutters).
+    step = text_height * 1.6
+    candidates = [(cx, cy)]
+    for k in range(1, 5):
+        candidates.append((cx, y1 + step * k))   # above the zone
+        candidates.append((cx, y0 - step * k))   # below the zone
+    lx, ly, box = cx, cy, label_bbox(cx, cy, label, text_height)
+    for tx, ty in candidates:
+        cand = label_bbox(tx, ty, label, text_height)
+        if not any(_rects_overlap(cand, o, pad=30) for o in occupied):
+            lx, ly, box = tx, ty, cand
+            break
+
+    # If the label moved off the zone, tie it back with a thin leader.
+    if abs(ly - cy) > text_height:
+        anchor_y = y1 if ly > cy else y0
+        msp.add_line((cx, anchor_y), (cx, ly - (text_height * 0.6 if ly > cy else -text_height * 0.6)),
+                     dxfattribs={"layer": tlayer})
+
     mtext = msp.add_mtext(
         label,
-        dxfattribs={
-            "layer": text_layer or layer,
-            "char_height": text_height,
-            "insert": (cx, cy),
-        },
+        dxfattribs={"layer": tlayer, "char_height": text_height, "insert": (lx, ly)},
     )
     try:
         mtext.dxf.attachment_point = 5  # MIDDLE_CENTER
     except Exception:
         pass
+    occupied.append(box)
 
 
 def doc_to_dxf_bytes(doc) -> bytes:

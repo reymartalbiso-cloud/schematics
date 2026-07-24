@@ -436,7 +436,10 @@ def _build_content(current_spec, instruction_label, user_text, context_block, pr
     if problems:
         parts.append(
             "Your previous spec had these problems - return a corrected spec that "
-            "fixes them (do NOT ask a question this time, just fix and emit):\n"
+            "fixes them (do NOT ask a question this time, just fix and emit). Keep "
+            "the container's stated length/width/height UNCHANGED - resolve the "
+            "conflict by adjusting the interior elements (fixture/panel/room widths "
+            "or count), never by enlarging the container:\n"
             + "\n".join(f"- {p}" for p in problems)
         )
     return "\n\n".join(parts)

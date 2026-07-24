@@ -156,13 +156,24 @@ def api_prompt():
     #    up with a specific, actionable error.
     problems = validation.validate_spec(mode, spec)
     if problems:
+        # One self-correction attempt: hand Claude the failing spec + the exact
+        # problems and ask for a fix. A container's physical dimensions are a
+        # hard constraint the user chose deliberately, so we LOCK them here -
+        # self-correction may only adjust interior elements, never silently
+        # enlarge the box. If it still can't fit, we return a clear error
+        # rather than a success hiding a changed container size.
+        locked_container = spec.get("container") if mode == "container" else None
         try:
-            spec = _generate_spec(mode, text, current_spec, context_block, correction_problems=problems)
+            corrected = _generate_spec(mode, text, spec, context_block, correction_problems=problems)
+            if isinstance(corrected, dict):
+                if locked_container is not None:
+                    corrected["container"] = locked_container
+                spec = corrected
         except Exception:
             pass  # keep the original problems for the message below
         problems = validation.validate_spec(mode, spec)
         if problems:
-            return jsonify({"error": "This design doesn't fit together: " + "; ".join(problems)}), 422
+            return jsonify({"error": "This design doesn't fit the container you chose: " + "; ".join(problems)}), 422
 
     # 3) Draw - surface any drawing failure as a specific message, not a 500.
     try:

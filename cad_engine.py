@@ -12,6 +12,7 @@ from dxf_render import doc_to_dxf_bytes, doc_to_preview_bytes  # noqa: F401 - re
 from dxf_render import add as _add
 from dxf_render import draw_measurement
 from dxf_render import draw_placeholder_zone
+from dxf_render import label_bbox as _label_bbox
 from dxf_render import length as _length
 from dxf_render import perp as _perp
 from dxf_render import scale as _scale
@@ -183,13 +184,16 @@ def _draw_openings(msp, walls, openings):
             _draw_window(msp, wall, opening)
 
 
-def _draw_rooms(msp, rooms):
+def _draw_rooms(msp, rooms, occupied=None):
     for room in rooms:
         text = room["name"]
         if room.get("area_sqm") is not None:
             text += f"\n{room['area_sqm']} m²"
         mtext = msp.add_mtext(text, dxfattribs={"layer": "TEXT", "char_height": 200})
-        mtext.set_location(insert=tuple(room["label_position"]))
+        pos = tuple(room["label_position"])
+        mtext.set_location(insert=pos)
+        if occupied is not None:
+            occupied.append(_label_bbox(pos[0], pos[1], room["name"], 200))
 
 
 # Real ezdxf DIMENSION entities are correct, standards-compliant DXF (verified
@@ -256,13 +260,14 @@ def build_doc(spec: dict):
     rooms = spec.get("rooms", []) or []
     dimensions = spec.get("dimensions", []) or []
 
+    label_boxes = []
     _draw_walls(msp, walls, openings)
     _draw_openings(msp, walls, openings)
-    _draw_rooms(msp, rooms)
+    _draw_rooms(msp, rooms, occupied=label_boxes)
     _draw_dimensions(msp, dimensions, walls)
 
     for element in spec.get("additional_elements", []) or []:
-        draw_placeholder_zone(msp, element, "EXTRAS", text_layer="TEXT")
+        draw_placeholder_zone(msp, element, "EXTRAS", text_layer="TEXT", occupied=label_boxes)
 
     return doc
 
