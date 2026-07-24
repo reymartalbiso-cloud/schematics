@@ -11,6 +11,7 @@ import ezdxf
 from dxf_render import doc_to_dxf_bytes, doc_to_preview_bytes  # noqa: F401 - re-exported
 from dxf_render import add as _add
 from dxf_render import draw_measurement
+from dxf_render import draw_placeholder_zone
 from dxf_render import length as _length
 from dxf_render import perp as _perp
 from dxf_render import scale as _scale
@@ -27,6 +28,7 @@ LAYER_DEFS = {
     "WINDOWS": 18,
     "TEXT": 25,
     "DIMS": 13,
+    "EXTRAS": 18,
 }
 
 
@@ -258,6 +260,9 @@ def build_doc(spec: dict):
     _draw_openings(msp, walls, openings)
     _draw_rooms(msp, rooms)
     _draw_dimensions(msp, dimensions, walls)
+
+    for element in spec.get("additional_elements", []) or []:
+        draw_placeholder_zone(msp, element, "EXTRAS", text_layer="TEXT")
 
     return doc
 

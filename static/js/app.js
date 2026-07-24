@@ -21,6 +21,10 @@
     // the full 4-view sheet is opt-in via the "Generate elevations too"
     // action so a single edit doesn't force-render all 4 views every time.
     views: ["plan"],
+    // When the backend asks a clarifying question, we stash the request it
+    // was answering here so the user's reply is sent WITH that context (the
+    // backend is stateless and only sees one prompt string at a time).
+    pendingClarification: null,
   };
 
   const ALL_CONTAINER_VIEWS = ["plan", "front", "side", "back"];
@@ -260,6 +264,7 @@
     state.chat = [];
     state.zoom = { scale: 1, tx: 0, ty: 0 };
     state.views = ["plan"];
+    state.pendingClarification = null;
     el.chatLog.innerHTML = "";
     el.designTitle.value = "";
     setPreview(null);
@@ -384,16 +389,34 @@
     dismissOnboarding(false);
     el.chatSend.disabled = true;
     el.plotSweep.hidden = false;
+
+    // If we're answering a clarifying question, send the original request
+    // together with this answer so the stateless backend has the full context.
+    const effectiveText = state.pendingClarification
+      ? `${state.pendingClarification}\n\n(Clarification: ${text})`
+      : text;
+
     const pendingMsg = addMessage("assistant", state.currentSpec ? "Applying your edit…" : "Generating your design…");
     pendingMsg.classList.add("msg-pending");
 
     try {
       const data = await postJSON("/api/prompt", {
         mode: state.mode,
-        text,
+        text: effectiveText,
         current_spec: state.currentSpec,
         views: state.mode === "container" ? state.views : undefined,
       });
+
+      if (data.needs_clarification) {
+        // Not a failure - a question. Keep the drawing untouched and wait
+        // for the user's reply, remembering what they're answering.
+        state.pendingClarification = effectiveText;
+        clearPending(pendingMsg);
+        addMessage("assistant", data.question);
+        return;
+      }
+
+      state.pendingClarification = null;
       state.currentSpec = data.spec;
       state.librecadInstalled = data.librecad_installed;
       state.dirty = true;
@@ -407,6 +430,9 @@
       clearPending(pendingMsg);
       addMessage("assistant", "Updated the preview — take a look, or keep iterating.");
     } catch (err) {
+      // Errors are a next step, not a dead end: the message is specific
+      // (validation problems, fit conflicts) and the user can adjust and retry.
+      state.pendingClarification = null;
       clearPending(pendingMsg);
       addMessage("error", err.message);
     } finally {

@@ -14,6 +14,33 @@ MAX_TOKENS = 4000
 
 _POINT = {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}
 
+# Open-ended escape hatch: anything the user asks for that has no dedicated
+# first-class field goes here and is drawn as a dashed labeled placeholder
+# zone - visible but clearly lower fidelity - rather than being dropped.
+_ADDITIONAL_ELEMENTS_SCHEMA = {
+    "type": "array",
+    "description": (
+        "Catch-all for elements the user asked for that have NO dedicated field "
+        "above (e.g. a skylight, a loft bed, a built-in wardrobe, a wood stove, a "
+        "carport). Never silently ignore a requested feature - if nothing else "
+        "fits, put it here so it is drawn as a labeled zone. Do NOT use this for "
+        "things that DO have a proper field (walls, doors, windows, kitchen, "
+        "bathroom, rooms, deck, balcony) - use those. Positions/sizes are in mm "
+        "in the same coordinate space as the rest of the drawing; approx_position "
+        "is the CENTRE of the zone."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "label": {"type": "string", "description": "Short human label drawn on the zone."},
+            "approx_position": {**_POINT, "description": "Centre [x, y] of the zone in mm."},
+            "approx_size_mm": {**_POINT, "description": "[width, height] of the zone in mm."},
+            "notes": {"type": "string", "description": "Optional: what was left unspecified."},
+        },
+        "required": ["label", "approx_position", "approx_size_mm"],
+    },
+}
+
 FLOORPLAN_SCHEMA = {
     "type": "object",
     "properties": {
@@ -21,6 +48,7 @@ FLOORPLAN_SCHEMA = {
             "type": "object",
             "properties": {"units": {"type": "string"}},
         },
+        "additional_elements": _ADDITIONAL_ELEMENTS_SCHEMA,
         "walls": {
             "type": "array",
             "items": {
@@ -229,6 +257,7 @@ CONTAINER_SCHEMA = {
             },
             "required": ["length_mm", "width_mm", "height_mm"],
         },
+        "additional_elements": _ADDITIONAL_ELEMENTS_SCHEMA,
         "levels": {
             "type": "array",
             "description": (
@@ -369,40 +398,85 @@ CONTAINER_SYSTEM_PROMPT = (
 )
 
 
+class ClarificationNeeded(Exception):
+    """Raised when the request is too underspecified to draw and Claude has
+    asked a plain-text clarifying question instead of emitting a spec. The
+    question is carried through to the user."""
+
+    def __init__(self, question: str):
+        super().__init__(question)
+        self.question = question
+
+
+# Appended to the system prompt so Claude knows it MAY ask instead of guess.
+_CLARIFY_RULE = (
+    "\nAsking vs. guessing: normally emit the spec via the tool. But if the "
+    "request is genuinely underspecified in a way that would MATERIALLY change "
+    "the drawing and you cannot reasonably default it - e.g. which wall an "
+    "element goes on, or how many of something - reply with ONE short plain-text "
+    "clarifying question INSTEAD of calling the tool, and do not guess. Only ask "
+    "when it matters: default minor things silently (exact millimetre placement, "
+    "a sensible standard size, the most obvious open wall). Never ask more than "
+    "one question, and never ask when you already have enough to draw something "
+    "reasonable."
+)
+
+
 def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic()
 
 
-def _build_content(current_spec, instruction_label, user_text, context_block):
+def _build_content(current_spec, instruction_label, user_text, context_block, problems=None):
     parts = []
     if context_block:
         parts.append(context_block)
     if current_spec is not None:
         parts.append(f"Current spec: {json.dumps(current_spec)}")
     parts.append(f"{instruction_label}: {user_text}")
+    if problems:
+        parts.append(
+            "Your previous spec had these problems - return a corrected spec that "
+            "fixes them (do NOT ask a question this time, just fix and emit):\n"
+            + "\n".join(f"- {p}" for p in problems)
+        )
     return "\n\n".join(parts)
 
 
-def _call(system_prompt, tool, current_spec, user_text, context_block):
+def _call(system_prompt, tool, current_spec, user_text, context_block, problems=None):
+    """Call Claude once. When `problems` is None the tool is optional, so
+    Claude may return a plain-text clarifying question (-> ClarificationNeeded).
+    When `problems` is given (a self-correction pass) the tool is forced."""
     label = "Instruction" if current_spec is not None else "Design request"
-    content = _build_content(current_spec, label, user_text, context_block)
+    content = _build_content(current_spec, label, user_text, context_block, problems)
+    forcing = problems is not None
+    system = system_prompt if forcing else system_prompt + _CLARIFY_RULE
     response = _client().messages.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,
-        system=system_prompt,
+        system=system,
         tools=[tool],
-        tool_choice={"type": "tool", "name": tool["name"]},
+        # Force the tool on a correction pass; otherwise let Claude choose
+        # between emitting the spec and asking a clarifying question.
+        tool_choice={"type": "tool", "name": tool["name"]} if forcing else {"type": "auto"},
         messages=[{"role": "user", "content": content}],
     )
     for block in response.content:
         if block.type == "tool_use":
             return block.input
-    raise RuntimeError("Claude did not return a tool_use block")
+    # No tool call -> treat any returned text as a clarifying question.
+    question = " ".join(
+        b.text.strip() for b in response.content if getattr(b, "type", None) == "text" and b.text.strip()
+    ).strip()
+    if question:
+        raise ClarificationNeeded(question)
+    raise RuntimeError("Claude returned neither a spec nor a question.")
 
 
-def generate_floorplan_spec(text: str, current_spec: dict | None = None, context_block: str = "") -> dict:
-    return _call(FLOORPLAN_SYSTEM_PROMPT, FLOORPLAN_TOOL, current_spec, text, context_block)
+def generate_floorplan_spec(text: str, current_spec: dict | None = None, context_block: str = "",
+                            correction_problems: list | None = None) -> dict:
+    return _call(FLOORPLAN_SYSTEM_PROMPT, FLOORPLAN_TOOL, current_spec, text, context_block, correction_problems)
 
 
-def generate_container_spec(text: str, current_spec: dict | None = None, context_block: str = "") -> dict:
-    return _call(CONTAINER_SYSTEM_PROMPT, CONTAINER_TOOL, current_spec, text, context_block)
+def generate_container_spec(text: str, current_spec: dict | None = None, context_block: str = "",
+                            correction_problems: list | None = None) -> dict:
+    return _call(CONTAINER_SYSTEM_PROMPT, CONTAINER_TOOL, current_spec, text, context_block, correction_problems)

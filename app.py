@@ -21,6 +21,7 @@ import claude_client
 import container_engine
 import designs
 import memory
+import validation
 
 # Explicit opt-in only - defaults to the safer (production) setting so a
 # missing env var never silently downgrades cookie security.
@@ -64,10 +65,12 @@ def _safe_next_path(candidate: str | None) -> str | None:
     return None
 
 
-def _generate_spec(mode, text, current_spec, context_block):
+def _generate_spec(mode, text, current_spec, context_block, correction_problems=None):
     # Looked up via the module (not bound at import time) so tests can
     # monkeypatch claude_client.generate_*_spec directly.
-    return getattr(claude_client, f"generate_{mode}_spec")(text, current_spec, context_block)
+    return getattr(claude_client, f"generate_{mode}_spec")(
+        text, current_spec, context_block, correction_problems
+    )
 
 
 def _build_doc(mode, spec, views=None):
@@ -139,13 +142,34 @@ def api_prompt():
 
     mem = memory.load_memory()
     context_block = memory.build_context_block(mode, mem)
+
+    # 1) Generate - Claude may instead ask a clarifying question.
     try:
         spec = _generate_spec(mode, text, current_spec, context_block)
+    except claude_client.ClarificationNeeded as clar:
+        return jsonify({"needs_clarification": True, "question": clar.question})
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 502
+        return jsonify({"error": f"The design couldn't be generated: {exc}"}), 502
 
-    doc = _build_doc(mode, spec, views)
-    preview_uri = _to_data_uri(ENGINES[mode].doc_to_preview_bytes(doc))
+    # 2) Validate - and if the spec isn't physically sensible, feed the exact
+    #    problems back to Claude for ONE self-correction attempt before giving
+    #    up with a specific, actionable error.
+    problems = validation.validate_spec(mode, spec)
+    if problems:
+        try:
+            spec = _generate_spec(mode, text, current_spec, context_block, correction_problems=problems)
+        except Exception:
+            pass  # keep the original problems for the message below
+        problems = validation.validate_spec(mode, spec)
+        if problems:
+            return jsonify({"error": "This design doesn't fit together: " + "; ".join(problems)}), 422
+
+    # 3) Draw - surface any drawing failure as a specific message, not a 500.
+    try:
+        doc = _build_doc(mode, spec, views)
+        preview_uri = _to_data_uri(ENGINES[mode].doc_to_preview_bytes(doc))
+    except Exception as exc:
+        return jsonify({"error": f"The spec was valid but couldn't be drawn: {exc}"}), 422
 
     memory.log_design(mode, memory.summarize_spec(mode, spec), mem)
 

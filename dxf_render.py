@@ -187,6 +187,39 @@ def draw_measurement(
         pass
 
 
+def draw_placeholder_zone(msp, element, layer, text_layer=None, text_height=140):
+    """Draw one open-ended 'additional element' as a dashed labeled zone.
+
+    This is deliberately lower fidelity than a first-class element (kitchen
+    run, glazing, etc.): anything the user asks for that has no dedicated
+    drawing logic yet still shows up as a visible, labeled rectangle rather
+    than being silently dropped. `element` = {label, approx_position [cx,cy],
+    approx_size_mm [w,h], notes?}. Position is the CENTER of the zone.
+    """
+    pos = element.get("approx_position") or [0, 0]
+    size = element.get("approx_size_mm") or [1000, 1000]
+    cx, cy = pos[0], pos[1]
+    w = abs(size[0]) or 1000
+    h = abs(size[1]) or 1000
+    x0, y0, x1, y1 = cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0
+    pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": layer, "linetype": "DASHED"})
+
+    label = element.get("label") or "element"
+    mtext = msp.add_mtext(
+        label,
+        dxfattribs={
+            "layer": text_layer or layer,
+            "char_height": text_height,
+            "insert": (cx, cy),
+        },
+    )
+    try:
+        mtext.dxf.attachment_point = 5  # MIDDLE_CENTER
+    except Exception:
+        pass
+
+
 def doc_to_dxf_bytes(doc) -> bytes:
     """Serialize an ezdxf Drawing to DXF file bytes, in-memory."""
     stream = io.StringIO()

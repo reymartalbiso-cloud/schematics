@@ -42,7 +42,7 @@ def test_floorplan_first_generation(client, monkeypatch):
 def test_floorplan_edit_preserves_current_spec_context(client, monkeypatch):
     captured = {}
 
-    def fake_generate(text, current_spec=None, context_block=""):
+    def fake_generate(text, current_spec=None, context_block="", correction_problems=None):
         captured["text"] = text
         captured["current_spec"] = current_spec
         edited = copy.deepcopy(current_spec)
@@ -185,3 +185,78 @@ def test_dashboard_save_list_reopen_update_delete(client):
     assert deleted.get_json()["deleted"] is True
     assert client.get("/api/designs").get_json() == []
     assert client.get(f"/api/designs/{design_id}").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 8. Open-ended extras: an element with no first-class field is drawn as a
+#    visible labeled placeholder zone rather than silently dropped.
+# ---------------------------------------------------------------------------
+def test_additional_elements_placeholder(client, monkeypatch):
+    spec = {
+        "container": {"length_mm": 6058, "width_mm": 2438, "height_mm": 2896},
+        "additional_elements": [
+            {"label": "wood stove", "approx_position": [3000, 1200], "approx_size_mm": [800, 800]},
+        ],
+    }
+    monkeypatch.setattr(claude_client, "generate_container_spec", lambda *a, **k: copy.deepcopy(spec))
+    resp = client.post("/api/prompt", json={"mode": "container", "text": "add a wood stove", "current_spec": None})
+    assert resp.status_code == 200
+
+    dl = client.post("/api/download", json={"mode": "container", "spec": resp.get_json()["spec"]})
+    assert b"wood stove" in dl.data       # the label is drawn
+    assert b"DASHED" in dl.data           # as a dashed placeholder zone
+
+
+# ---------------------------------------------------------------------------
+# 9. Clarification: an underspecified request yields a question, not a guess.
+# ---------------------------------------------------------------------------
+def test_clarification_question_is_surfaced(client, monkeypatch):
+    def ask(*a, **k):
+        raise claude_client.ClarificationNeeded("Which wall should the window go on?")
+
+    monkeypatch.setattr(claude_client, "generate_floorplan_spec", ask)
+    resp = client.post("/api/prompt", json={"mode": "floorplan", "text": "add a window", "current_spec": None})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data.get("needs_clarification") is True
+    assert "wall" in data["question"].lower()
+    assert "spec" not in data
+
+
+# ---------------------------------------------------------------------------
+# 10. Validation: a spec that can't fit triggers ONE self-correction; if the
+#     correction fixes it we proceed, otherwise a specific error is returned.
+# ---------------------------------------------------------------------------
+def test_validation_self_correction_recovers(client, monkeypatch):
+    bad = {
+        "container": {"length_mm": 6058, "width_mm": 2438, "height_mm": 2896},
+        "plan": {"kitchen_run": {"depth_mm": 700, "segments": [
+            {"label": "counter", "width_mm": 5000}, {"label": "counter", "width_mm": 5000}]}},
+    }
+    good = copy.deepcopy(SAMPLE_CONTAINER_SPEC_WITH_KITCHEN)
+    calls = {"n": 0}
+
+    def gen(text, current_spec=None, context_block="", correction_problems=None):
+        calls["n"] += 1
+        # First call returns an over-length kitchen run; the correction call
+        # (correction_problems set) returns a valid spec.
+        return copy.deepcopy(good) if correction_problems else copy.deepcopy(bad)
+
+    monkeypatch.setattr(claude_client, "generate_container_spec", gen)
+    resp = client.post("/api/prompt", json={"mode": "container", "text": "cram in two 5m counters", "current_spec": None})
+    assert resp.status_code == 200
+    assert calls["n"] == 2                      # generated once, self-corrected once
+    assert "kitchen_run" in resp.get_json()["spec"]["plan"]
+
+
+def test_validation_hard_failure_returns_specific_error(client, monkeypatch):
+    bad = {
+        "container": {"length_mm": 6058, "width_mm": 2438, "height_mm": 2896},
+        "plan": {"kitchen_run": {"depth_mm": 700, "segments": [
+            {"label": "counter", "width_mm": 5000}, {"label": "counter", "width_mm": 5000}]}},
+    }
+    monkeypatch.setattr(claude_client, "generate_container_spec", lambda *a, **k: copy.deepcopy(bad))
+    resp = client.post("/api/prompt", json={"mode": "container", "text": "two 5m counters", "current_spec": None})
+    assert resp.status_code == 422
+    msg = resp.get_json()["error"]
+    assert "kitchen run" in msg.lower() and "interior" in msg.lower()  # names the actual conflict

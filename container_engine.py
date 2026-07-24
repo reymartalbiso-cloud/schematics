@@ -25,6 +25,7 @@ import ezdxf
 from dxf_render import doc_to_dxf_bytes  # noqa: F401 - re-exported
 from dxf_render import doc_to_preview_bytes as _doc_to_preview_bytes
 from dxf_render import draw_measurement
+from dxf_render import draw_placeholder_zone
 
 
 ROW_GAP_MM = 1500
@@ -975,6 +976,13 @@ def draw_plan_view(msp, spec, origin):
     _dim(msp, (ox, oy + width), (ox + length, oy + width), top_offset, "DIMS")
     _dim_chain_vertical(msp, ox - 330, ox, [oy, oy + width], layer="DIMS")
 
+    # Open-ended extras (anything without a first-class field): dashed labeled
+    # zones, positioned in container-local coordinates offset by the origin.
+    for element in spec.get("additional_elements", []) or []:
+        pos = element.get("approx_position") or [0, 0]
+        shifted = dict(element, approx_position=[ox + pos[0], oy + pos[1]])
+        draw_placeholder_zone(msp, shifted, "EXTRAS", text_layer="TEXT")
+
     title = plan.get("title")
     _title_below(msp, title, ox + length / 2.0, bottom_dim_y - 450)
 
@@ -1335,6 +1343,7 @@ def _add_layers(doc):
         ("DECK", 35),
         ("FURNITURE", 18),
         ("STAIR", 25),
+        ("EXTRAS", 18),
     ]
     for name, lineweight in layer_defs:
         if name not in doc.layers:
